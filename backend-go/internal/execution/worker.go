@@ -141,6 +141,11 @@ type Worker struct {
 	// value falls back to DefaultPriorityWeights.
 	PriorityWeights []int
 
+	// redis5Reclaim is enabled after Redis reports that XAUTOCLAIM is
+	// unavailable. Redis 5 uses XPENDING + XCLAIM for the same recovery path.
+	// Only reclaimLoop reads/writes this field.
+	redis5Reclaim bool
+
 	mu       sync.Mutex
 	inflight map[ids.ID]*executionControl
 }
@@ -692,6 +697,11 @@ func (w *Worker) reclaimLoop(ctx context.Context) {
 }
 
 func (w *Worker) reclaimStream(ctx context.Context, stream string, reclaimAfter time.Duration) {
+	if w.redis5Reclaim {
+		w.reclaimStreamRedis5(ctx, stream, reclaimAfter)
+		return
+	}
+
 	cursor := "0"
 	for {
 		if ctx.Err() != nil {
@@ -707,6 +717,12 @@ func (w *Worker) reclaimStream(ctx context.Context, stream string, reclaimAfter 
 		}).Result()
 		if err != nil {
 			if ctx.Err() != nil {
+				return
+			}
+			if isUnknownRedisCommand(err, "xautoclaim") {
+				w.redis5Reclaim = true
+				w.Log.Info("Redis 5 reclaim fallback enabled", "stream", stream)
+				w.reclaimStreamRedis5(ctx, stream, reclaimAfter)
 				return
 			}
 			w.Log.Warn("xautoclaim failed", "err", err, "stream", stream)
@@ -725,6 +741,89 @@ func (w *Worker) reclaimStream(ctx context.Context, stream string, reclaimAfter 
 			return
 		}
 		cursor = next
+	}
+}
+
+func isUnknownRedisCommand(err error, command string) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unknown command") && strings.Contains(message, strings.ToLower(command))
+}
+
+// reclaimStreamRedis5 implements the XAUTOCLAIM recovery semantics using
+// commands available since Redis 5. XPENDING is intentionally issued without
+// its IDLE option because that option was also added in Redis 6.2; idle time is
+// filtered from the extended XPENDING response and rechecked atomically by
+// XCLAIM's min-idle argument.
+func (w *Worker) reclaimStreamRedis5(ctx context.Context, stream string, reclaimAfter time.Duration) {
+	const batchSize = int64(10)
+	start := "-"
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		pending, err := w.RDB.XPendingExt(ctx, &goredis.XPendingExtArgs{
+			Stream: stream,
+			Group:  w.Group,
+			Start:  start,
+			End:    "+",
+			Count:  batchSize,
+		}).Result()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			w.Log.Warn("Redis 5 xpending reclaim failed", "err", err, "stream", stream)
+			if strings.HasPrefix(err.Error(), "NOGROUP ") {
+				w.ensureStreamGroup(ctx, stream)
+			}
+			return
+		}
+		if len(pending) == 0 {
+			return
+		}
+
+		ids := make([]string, 0, len(pending))
+		for _, entry := range pending {
+			// Pagination is inclusive in Redis 5. Skip the prior page's last
+			// ID when it is returned again.
+			if entry.ID == start {
+				continue
+			}
+			if entry.Idle >= reclaimAfter {
+				ids = append(ids, entry.ID)
+			}
+		}
+		if len(ids) > 0 {
+			messages, claimErr := w.RDB.XClaim(ctx, &goredis.XClaimArgs{
+				Stream:   stream,
+				Group:    w.Group,
+				Consumer: w.WorkerID + "-reclaim",
+				MinIdle:  reclaimAfter,
+				Messages: ids,
+			}).Result()
+			if claimErr != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				w.Log.Warn("Redis 5 xclaim reclaim failed", "err", claimErr, "stream", stream)
+				if strings.HasPrefix(claimErr.Error(), "NOGROUP ") {
+					w.ensureStreamGroup(ctx, stream)
+				}
+				return
+			}
+			for _, msg := range messages {
+				w.process(ctx, streamMessage{stream: stream, msg: msg})
+			}
+		}
+
+		last := pending[len(pending)-1].ID
+		if int64(len(pending)) < batchSize || last == start {
+			return
+		}
+		start = last
 	}
 }
 

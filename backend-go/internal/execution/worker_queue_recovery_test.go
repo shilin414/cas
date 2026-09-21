@@ -115,6 +115,102 @@ func TestWorkerQueueErrorsDoNotRecreateGroups(t *testing.T) {
 	}
 }
 
+func TestWorkerReclaimFallsBackToRedis5Commands(t *testing.T) {
+	autoClaims, pendingCalls, claims := 0, 0, 0
+	acked := false
+	w := queueTestWorker(t, func(_ context.Context, cmd goredis.Cmder) error {
+		switch cmd.Name() {
+		case "xautoclaim":
+			autoClaims++
+			return errors.New("ERR unknown command xautoclaim, with args beginning with: stream")
+		case "xpending":
+			pendingCalls++
+			for _, arg := range cmd.Args() {
+				if arg == "idle" {
+					t.Fatal("Redis 5 fallback must not use the Redis 6.2 XPENDING IDLE option")
+				}
+			}
+			entries := []goredis.XPendingExt(nil)
+			if pendingCalls == 1 {
+				entries = []goredis.XPendingExt{{ID: "1-0", Idle: 2 * time.Minute}}
+			}
+			cmd.(*goredis.XPendingExtCmd).SetVal(entries)
+		case "xclaim":
+			claims++
+			cmd.(*goredis.XMessageSliceCmd).SetVal([]goredis.XMessage{{ID: "1-0", Values: map[string]any{"run_id": "malformed"}}})
+		case "xack":
+			acked = true
+			cmd.(*goredis.IntCmd).SetVal(1)
+		default:
+			t.Fatalf("unexpected command: %v", cmd.Args())
+		}
+		return nil
+	})
+	stream := w.classStreams()[0]
+	w.reclaimStream(context.Background(), stream, time.Minute)
+	w.reclaimStream(context.Background(), stream, time.Minute)
+	if autoClaims != 1 || pendingCalls != 2 || claims != 1 || !acked {
+		t.Fatalf("fallback calls: xautoclaim=%d xpending=%d xclaim=%d acked=%v", autoClaims, pendingCalls, claims, acked)
+	}
+}
+
+func TestWorkerRedis5ReclaimPaginatesAndFiltersIdleEntries(t *testing.T) {
+	var starts, claimed []string
+	acked := 0
+	w := queueTestWorker(t, func(_ context.Context, cmd goredis.Cmder) error {
+		switch cmd.Name() {
+		case "xpending":
+			args := cmd.Args()
+			for _, arg := range args {
+				if arg == "idle" {
+					t.Fatal("Redis 5 fallback must not use XPENDING IDLE")
+				}
+			}
+			start := args[3].(string)
+			starts = append(starts, start)
+			if start == "-" {
+				entries := make([]goredis.XPendingExt, 10)
+				for i := range entries {
+					entries[i] = goredis.XPendingExt{ID: fmt.Sprintf("%d-0", i+1), Idle: time.Second}
+				}
+				entries[8].Idle = 2 * time.Minute
+				cmd.(*goredis.XPendingExtCmd).SetVal(entries)
+			} else {
+				cmd.(*goredis.XPendingExtCmd).SetVal([]goredis.XPendingExt{
+					{ID: "10-0", Idle: 2 * time.Minute},
+					{ID: "11-0", Idle: 2 * time.Minute},
+				})
+			}
+		case "xclaim":
+			args := cmd.Args()
+			ids := make([]string, 0, len(args)-5)
+			for _, arg := range args[5:] {
+				ids = append(ids, arg.(string))
+			}
+			claimed = append(claimed, ids...)
+			messages := make([]goredis.XMessage, 0, len(ids))
+			for _, id := range ids {
+				messages = append(messages, goredis.XMessage{ID: id, Values: map[string]any{"run_id": "malformed"}})
+			}
+			cmd.(*goredis.XMessageSliceCmd).SetVal(messages)
+		case "xack":
+			acked++
+			cmd.(*goredis.IntCmd).SetVal(1)
+		default:
+			t.Fatalf("unexpected command: %v", cmd.Args())
+		}
+		return nil
+	})
+	w.redis5Reclaim = true
+	w.reclaimStream(context.Background(), w.classStreams()[0], time.Minute)
+	if !reflect.DeepEqual(starts, []string{"-", "10-0"}) {
+		t.Fatalf("XPENDING starts = %v", starts)
+	}
+	if !reflect.DeepEqual(claimed, []string{"9-0", "11-0"}) || acked != 2 {
+		t.Fatalf("claimed=%v acked=%d", claimed, acked)
+	}
+}
+
 func TestWorkerReclaimTraversesEmptyPages(t *testing.T) {
 	var cursors []string
 	acked := false

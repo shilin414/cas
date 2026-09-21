@@ -45,4 +45,13 @@ REDIS_KEY_PREFIX=xiaoan3
 
 In cluster mode, go-redis applies the pool size per cluster node. Keep the same
 key prefix across all backend processes in one environment. Credentials belong
-in the deployment secret store or ignored `.env.local`, never in tracked files.
+in the deployment secret store or ignored `.env.*.local` profile files, never in tracked files.
+
+## Redis version compatibility
+
+Redis 5.0 and newer are supported. Workers prefer `XAUTOCLAIM` on Redis
+6.2+, and automatically fall back once per process to the Redis 5-compatible
+`XPENDING` + `XCLAIM` recovery sequence when that command is unavailable.
+The fallback does not use the `XPENDING IDLE` option because that option also
+requires Redis 6.2; it filters the idle time returned by the Redis 5 extended
+`XPENDING` response and lets `XCLAIM` recheck the minimum idle time atomically.
