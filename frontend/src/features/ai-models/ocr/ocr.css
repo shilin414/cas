@@ -1,0 +1,42 @@
+.ocr-panel, .ocr-panel * { box-sizing: border-box; }
+.ocr-panel { display: grid; gap: var(--space-6); color: var(--color-text); font-size: var(--font-size-body); font-family: var(--font-body); }
+.ocr-panel h3, .ocr-panel h4, .ocr-panel p { margin: 0; }
+.ocr-panel header { display: grid; gap: var(--space-3); }
+.ocr-panel header p, .ocr-muted { color: var(--color-text-sec); font-size: var(--font-size-meta); }
+.ocr-privacy { padding: var(--space-5); background: var(--color-primary-softer); border-radius: var(--radius-control); }
+.ocr-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+.ocr-panel button, .ocr-panel input { font: inherit; border: 1px solid var(--color-border); border-radius: var(--radius-control); padding: var(--space-3) var(--space-5); background: var(--color-bg-card); color: var(--color-text); min-height: var(--control-h-lg); }
+.ocr-panel button { cursor: pointer; }
+.ocr-panel button:disabled, .ocr-panel input:disabled { opacity: .5; cursor: not-allowed; }
+.ocr-panel button:focus-visible, .ocr-panel input:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+.ocr-panel .ocr-primary { background: var(--color-primary); color: var(--color-on-primary); }
+.ocr-file { display: grid; gap: var(--space-1); max-width: 100%; font-size: var(--font-size-meta); }
+.ocr-file input { max-width: 100%; width: 235px; }
+.ocr-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: var(--space-6); }
+.ocr-preview { position: relative; width: 100%; background: var(--color-bg-surface); border: 1px solid var(--color-border); overflow: hidden; }
+.ocr-preview canvas, .ocr-preview svg { display: block; width: 100%; height: 100%; }
+.ocr-preview svg { position: absolute; inset: 0; touch-action: none; cursor: crosshair; }
+.ocr-crop { fill: var(--color-primary-softer); stroke: var(--color-primary); stroke-width: 2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+.ocr-box { fill: none; stroke: var(--color-success); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.ocr-panel fieldset { border: 1px solid var(--color-border); border-radius: var(--radius-control); min-width: 0; }
+.ocr-crop-fields { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-bottom: var(--space-3); }
+.ocr-crop-fields label { display: grid; min-width: 0; }
+.ocr-crop-fields input { width: 100%; min-width: 0; }
+.ocr-error { color: var(--color-error); background: var(--color-error-soft); padding: var(--space-5); border-radius: var(--radius-control); overflow-wrap: anywhere; }
+.ocr-lines { max-height: 300px; overflow: auto; padding-left: var(--space-9); }
+.ocr-lines li { padding: var(--space-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ocr-lines small { color: var(--color-text-dim); margin-left: var(--space-5); }
+.ocr-candidates { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-3); }
+.ocr-candidates button, .ocr-manual input, .ocr-confirmed strong { font-family: var(--font-mono); }
+.ocr-manual { display: grid; gap: var(--space-3); }
+.ocr-manual input { min-width: 0; width: 100%; }
+.ocr-confirmed { overflow-wrap: anywhere; padding: var(--space-5); background: var(--color-success-soft); }
+.ocr-spinner { display: inline-block; width: 12px; height: 12px; margin-right: var(--space-3); border-radius: var(--radius-pill); border: 2px solid var(--color-border); border-top-color: var(--color-primary); animation: ocr-spin 1s linear infinite; }
+@keyframes ocr-spin { to { transform: rotate(360deg); } }
+@media (max-width: 768px) { .ocr-workspace { grid-template-columns: minmax(0,1fr); } .ocr-file { width: 100%; } .ocr-file input { width: 100%; } .ocr-panel button { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .ocr-spinner { animation: none; } }
+
+.ocr-actions { align-items: flex-end; }
+.ocr-file input { height: var(--control-h-lg); padding: 0; }
+.ocr-file input::file-selector-button { font: inherit; height: 100%; padding: 0 var(--space-5); margin-right: var(--space-3); background: var(--color-bg-surface); color: var(--color-text); border: 0; border-right: 1px solid var(--color-border); cursor: pointer; }
+.ocr-file input:disabled::file-selector-button { cursor: not-allowed; }

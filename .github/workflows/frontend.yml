@@ -1,0 +1,59 @@
+name: frontend
+
+on:
+  push:
+    branches: [dev, main, exam]
+    paths: ['deployment.json', 'frontend/**', '.github/workflows/frontend.yml']
+  pull_request:
+    paths: ['deployment.json', 'frontend/**', '.github/workflows/frontend.yml']
+
+defaults:
+  run:
+    working-directory: frontend
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: typecheck
+        run: npx tsc --noEmit
+
+      # The review gate requires lint, and `--max-warnings 0` is part of the
+      # repo's own script. Keeping lint only in the local developer path let
+      # unused imports and a conditional hook accumulate unnoticed.
+      - name: lint
+        run: npm run lint
+
+      - name: unit tests
+        run: npx vitest run
+
+      - name: deployment path regression
+        run: npm run test:deployment
+
+      - name: css token check
+        run: npm run check:tokens
+
+      - name: production build
+        run: npm run build
+
+      # Validate the repository-root build context, not local dist/node_modules.
+      - name: clean frontend container build
+        working-directory: .
+        run: docker build -f frontend/Dockerfile -t studio-web-ci .
+
+      - name: frontend container configuration smoke
+        working-directory: .
+        run: |
+          docker run --rm --add-host api:127.0.0.1 --add-host stream:127.0.0.1 studio-web-ci nginx -t
+          index=$(node --input-type=module -e "import {readDeployment} from './frontend/scripts/deployment.mjs'; process.stdout.write('/usr/share/nginx/html'+readDeployment().basePath+'index.html')")
+          docker run --rm --env EXPECTED_INDEX="$index" --entrypoint sh studio-web-ci -ec 'test -s "$EXPECTED_INDEX"; grep -q "absolute_redirect off;" /etc/nginx/conf.d/default.conf'

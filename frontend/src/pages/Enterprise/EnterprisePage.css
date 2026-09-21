@@ -1,0 +1,65 @@
+.enterprise-console { width: 100%; min-width: 0; height: 100%; min-height: 0; overflow: hidden; background: var(--color-bg-void); }
+.enterprise-console.ant-layout { min-width: 0; }
+.enterprise-sider { flex: none !important; height: 100%; overflow-y: auto; border-right: 1px solid var(--color-border); background: var(--color-bg-surface) !important; }
+.enterprise-brand { padding: var(--space-7) var(--space-6) var(--space-5); color: var(--color-text); font-family: var(--font-display); font-size: var(--font-size-section-title); font-weight: 700; }
+.enterprise-sider .ant-menu { border: 0 !important; background: transparent !important; }
+.enterprise-sider .ant-menu-item { border-radius: var(--radius-control); }
+.enterprise-content.ant-layout-content { flex: 1 1 0; width: 0; max-width: 100%; height: 100%; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: var(--page-padding-block) var(--page-padding-inline) var(--space-11); background: var(--color-bg-void); }
+.enterprise-section { container-type: inline-size; display: flex; width: min(100%, var(--content-max)); max-width: 100%; min-width: 0; margin-inline: auto; flex-direction: column; gap: var(--space-6); }
+.enterprise-section__head { display: flex; min-width: 0; align-items: flex-end; justify-content: space-between; gap: var(--space-6); }
+.enterprise-section__head > div { min-width: 0; }
+.enterprise-section__head > .ant-space { min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+.enterprise-section__head h2 { margin: 0; font-family: var(--font-display); font-size: var(--font-size-page-title); line-height: var(--line-height-tight); }
+.enterprise-section__head p { margin: var(--space-2) 0 0; color: var(--color-text-sec); }
+.enterprise-metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-5); }
+.enterprise-more { display: flex; justify-content: center; }
+.enterprise-section .ant-table-wrapper { min-width: 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-bg-card); }
+.enterprise-table-host { width: 100%; max-width: 100%; min-width: 0; overflow: hidden; }
+.enterprise-table-host .ant-table-wrapper, .enterprise-table-host .ant-spin-nested-loading, .enterprise-table-host .ant-spin-container, .enterprise-table-host .ant-table { width: 100%; max-width: 100%; min-width: 0; }
+.enterprise-table-host .ant-table-container { overflow: hidden; }
+.enterprise-table-host .ant-table-cell { min-width: 0; }
+.enterprise-cell-ellipsis { display: block; width: 100%; max-width: 100%; }
+.enterprise-resource-name { display: flex; min-width: 0; align-items: center; gap: var(--space-3); }
+.enterprise-resource-name__text { display: block; flex: 1; min-width: 0; max-width: 100%; }
+.enterprise-resource-icon { display: grid; flex: none; width: var(--control-h-sm); height: var(--control-h-sm); place-items: center; border-radius: var(--radius-control); background: var(--color-bg-elevated); }
+.enterprise-resource-actions { white-space: nowrap; }
+.enterprise-resource-actions .ant-btn { padding-inline: var(--space-1); }
+@container (max-width: 760px) {
+  .enterprise-section__head { align-items: stretch; flex-direction: column; }
+  .enterprise-section__head > .ant-space { width: 100%; justify-content: stretch; }
+  .enterprise-section__head .ant-input-search { flex: 1 1 220px; width: auto; min-width: 0; }
+}
+@media (max-width: 1024px) { .enterprise-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 768px) { .enterprise-console { display: block; } .enterprise-sider { width: 100% !important; max-width: none !important; } .enterprise-section__head { align-items: stretch; flex-direction: column; } .enterprise-metric-grid { grid-template-columns: 1fr; } }
+.enterprise-permission-matrix { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2) var(--space-4); }
+@media (max-width: 700px) { .enterprise-permission-matrix { grid-template-columns: 1fr; } }
+.enterprise-role-fields { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+.enterprise-permission-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); width: 100%; }
+.enterprise-permission-group .ant-card-head { min-height: 48px; }
+.enterprise-permission-group__desc { display: block; margin-top: 2px; font-size: 12px; font-weight: 400; }
+.enterprise-permission-group__items { display: grid; gap: 10px; }
+.enterprise-permission-group__items .ant-checkbox-wrapper { align-items: flex-start; margin-inline-start: 0; }
+.enterprise-permission-item { display: inline-flex; flex-direction: column; gap: 2px; }
+.enterprise-permission-item small { color: var(--color-text-dim); line-height: 1.4; }
+@media (max-width: 760px) { .enterprise-role-fields, .enterprise-permission-groups { grid-template-columns: 1fr; } }
+
+/* Extensible enterprise sync center */
+.enterprise-sync-target-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+.enterprise-sync-target { min-width: 0; }
+.enterprise-sync-target .ant-card-head-wrapper { align-items: flex-start; gap: var(--space-3); }
+.enterprise-sync-target .ant-card-head-title { min-width: 0; white-space: normal; }
+.enterprise-sync-target__description { min-height: 44px; margin: 0; color: var(--color-text-sec); line-height: 1.6; }
+.enterprise-sync-target__facts { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); margin-top: var(--space-3); color: var(--color-text-sec); font-size: 13px; }
+.enterprise-sync-target__form { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(140px, 1fr) minmax(160px, 1fr) minmax(160px, 1fr) auto; gap: 0 var(--space-3); align-items: end; margin-top: var(--space-5); }
+.enterprise-sync-target__form .ant-form-item { min-width: 0; margin-bottom: 0; }
+@container (max-width: 980px) {
+  .enterprise-sync-target-grid { grid-template-columns: 1fr; }
+}
+@container (max-width: 720px) {
+  .enterprise-sync-target__form { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--space-3); }
+  .enterprise-sync-target__form .ant-form-item:last-child { grid-column: 1 / -1; }
+}

@@ -1,0 +1,3 @@
+import type { ReactNode } from 'react';
+export interface SegmentedTab { value: string; label: ReactNode; disabled?: boolean; }
+export function SegmentedTabs({ value, options, onChange, label = '切换视图', className = '' }: { value: string; options: SegmentedTab[]; onChange: (value: string) => void; label?: string; className?: string }) { return <div className={`product-segmented-tabs ${className}`.trim()} role="tablist" aria-label={label}>{options.map((option) => <button key={option.value} type="button" role="tab" aria-selected={option.value === value} disabled={option.disabled} className={option.value === value ? 'is-active' : ''} onClick={() => onChange(option.value)}>{option.label}</button>)}</div>; }

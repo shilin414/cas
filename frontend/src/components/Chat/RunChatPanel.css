@@ -1,0 +1,433 @@
+/* RunChatPanel composer — v2 run chain. */
+
+.run-chat-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.run-chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.run-chat-clip,
+.run-chat-send {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+  color: var(--color-text-sec);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.run-chat-clip:hover:not(:disabled),
+.run-chat-send:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.run-chat-clip:disabled,
+.run-chat-send:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.run-chat-send:not(:disabled) {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.run-chat-textarea {
+  flex: 1;
+  min-height: 36px;
+  max-height: 140px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+
+.run-chat-textarea:focus {
+  border-color: var(--color-primary);
+}
+
+.run-chat-hint {
+  font-size: 12px;
+  color: var(--color-text-dim);
+}
+
+/* Uploads */
+.run-chat-upload-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.run-chat-upload-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-bg-elevated) 76%, transparent);
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.run-chat-upload-chip button {
+  border: none;
+  background: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+
+.run-chat-upload-chip button:hover {
+  color: var(--color-error);
+}
+
+.run-chat-upload-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-chat-upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* Messages */
+.run-chat-bubble {
+  min-width: 0;
+  max-width: 75%;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-bg-card);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.run-chat-bubble--user {
+  border-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
+  background: color-mix(in srgb, var(--color-primary) 12%, var(--color-bg-card));
+}
+
+.run-chat-bubble__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--color-text-dim);
+  font-size: 12px;
+}
+
+.run-chat-bubble__header .font-medium {
+  color: var(--color-text-sec);
+  font-weight: 600;
+}
+
+.run-chat-dotting {
+  color: var(--color-primary);
+}
+
+.run-chat-error-tag {
+  padding: 0 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+  color: var(--color-error);
+  font-size: 11px;
+}
+
+/* 管理员撤销（Hard Kill）≠ 执行失败：用中性提示色，不用错误红。 */
+.run-chat-cancelled-tag {
+  padding: 0 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-warning, #faad14) 16%, transparent);
+  color: var(--color-warning, #faad14);
+  font-size: 11px;
+}
+
+.run-chat-error-text {
+  margin-top: 6px;
+  color: var(--color-error);
+  font-size: 12px;
+}
+
+.run-chat-error-text--cancelled {
+  color: var(--color-warning, #faad14);
+}
+
+.run-chat-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* Inline markdown images (generated artifacts). The wrapper reserves space
+   so the 302 → CDN resolution doesn't reflow the bubble, and the loading
+   spinner replaces the browser's broken-image icon. */
+.chat-img {
+  display: inline-flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  min-height: 96px;
+  min-width: 160px;
+  margin: 6px 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+}
+
+.chat-img img {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+.chat-img__loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 96px;
+}
+
+.chat-img--pending,
+.chat-img--broken {
+  padding: 20px 16px;
+  font-size: 12px;
+  color: var(--color-text-dim);
+  max-width: 240px;
+}
+
+.chat-img--broken {
+  color: var(--color-error);
+}
+
+.run-chat-error-banner {
+  padding: 12px 24px 0;
+}
+
+/* ── 转发/分享：多选模式 ──────────────────────────────────────────── */
+
+.run-chat-msg-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  /* Width budget moves here from the bubble (bubble now lives inside this
+     wrapper with the select checkbox), keeping the same 75% cap as before. */
+  max-width: 75%;
+}
+
+.run-chat-msg-body .run-chat-bubble {
+  max-width: 100%;
+}
+
+.run-chat-msg-body--selectable {
+  cursor: pointer;
+}
+
+/* 消息操作行：只挂在最后一个回复的气泡底部（转发 · 复制），纯图标圆形按钮。
+   常驻显示而不是 hover 才浮现——触屏没有 hover，悬停式入口在移动端等于不可发现。 */
+.run-chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.run-chat-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-sec);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  /* 没有文字，点按区域就是这颗圆钮本身；去掉系统高亮块 */
+  -webkit-tap-highlight-color: transparent;
+}
+
+.run-chat-action:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-primary);
+}
+
+.run-chat-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 55%, transparent);
+  outline-offset: 1px;
+}
+
+/* 复制成功的即时反馈：图标换成对勾并转成成功色（没有文字可换，只靠图形）。 */
+.run-chat-action--copied,
+.run-chat-action--copied:hover {
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  color: var(--color-success);
+}
+
+/* 选中圆点：贴着气泡一侧（用户消息在其气泡左侧，即对话中缝方向）。 */
+.run-chat-select-check {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--color-border-lit);
+  border-radius: 50%;
+  background: var(--color-bg-card);
+  color: var(--color-on-primary);
+  font-size: 11px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.run-chat-select-check--on {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+.run-chat-select-check--off {
+  opacity: 0.35;
+}
+
+/* 选择模式下的气泡提示：未选中的消息淡一档，选中的亮起。 */
+.run-chat-msg-body--select .run-chat-bubble {
+  transition: border-color 0.15s ease;
+}
+
+.run-chat-msg-body--selectable .run-chat-bubble {
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+}
+
+/* 底部选择操作栏（替换输入框，参考主流 IM 的多选转发交互）。 */
+.run-chat-select-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg-card);
+}
+
+.run-chat-select-btn {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: none;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--color-text-sec);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.run-chat-select-btn:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.run-chat-select-count {
+  margin-left: auto;
+  margin-right: 4px;
+  font-size: 13px;
+  color: var(--color-text-sec);
+}
+
+/* ── 分享结果弹窗 ────────────────────────────────────────────────── */
+
+.run-chat-share-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.run-chat-share-lead {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--color-text);
+}
+
+.run-chat-share-lead b {
+  color: var(--color-primary);
+}
+
+.run-chat-share-link {
+  display: flex;
+  gap: 8px;
+}
+
+.run-chat-share-link input {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.run-chat-share-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-dim);
+}
+
+/* ── 移动端适配 ──────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  /* 选择操作栏：窄屏换行，主按钮占满剩余宽度便于点按。 */
+  .run-chat-select-bar {
+    flex-wrap: wrap;
+  }
+
+  .run-chat-select-count {
+    margin-left: 0;
+  }
+
+  .run-chat-select-bar .ant-btn {
+    flex: 1;
+  }
+
+  .run-chat-share-link {
+    flex-direction: column;
+  }
+
+  /* 错误横幅与消息区共用同一条左边线（--chat-gutter 定义在 chatSurface.css 的移动端块；
+     这里带 24px 兜底，万一变量缺失也不会塌成 0）。 */
+  .run-chat-error-banner {
+    padding-left: var(--chat-gutter, 24px);
+    padding-right: var(--chat-gutter, 24px);
+  }
+}

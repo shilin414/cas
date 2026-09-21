@@ -1,0 +1,283 @@
+package http
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/shilin414/cas/backend-go/internal/feishucard"
+	genapi "github.com/shilin414/cas/backend-go/internal/gen/api"
+	db "github.com/shilin414/cas/backend-go/internal/gen/db"
+	"github.com/shilin414/cas/backend-go/internal/sharing"
+)
+
+// ─────────────────────────────────────────────── feishu forwarding ──
+//
+// Delivers a share snapshot card to Feishu users/groups. The share token is
+// validated against the caller's own shares, the link origin comes from the
+// request Origin header, and every send uses the caller's user access token
+// only — delivery keeps the caller's identity (the forward UI presents the
+// message as sent by the user; there is no app-token fallback, which would
+// silently switch the sender identity to the bot).
+
+const feishuForwardMaxTargets = 20
+
+// ListFeishuForwardTargets implements GET /api/v2/feishu/forward/targets.
+//
+// Response envelope (六次复审 P1-3): {items, next_cursor, has_more}. user
+// targets paginate with the provider's page_token (search/v1/user supports
+// page_size 1-200 / page_token — the old single 20-row page silently hid
+// match #21+); chat targets are always returned in full (the backend already
+// follows the provider's pagination to has_more=false), so next_cursor stays
+// empty and has_more false for chats.
+func (s *Server) ListFeishuForwardTargets(w http.ResponseWriter, r *http.Request, params genapi.ListFeishuForwardTargetsParams) {
+	caller := userFrom(r.Context())
+	if caller == nil {
+		writeDetail(w, http.StatusUnauthorized, "Authentication credentials were not provided.")
+		return
+	}
+	if s.FeishuAuth == nil {
+		writeSimpleError(w, http.StatusInternalServerError, "feishu auth resolver unavailable")
+		return
+	}
+	uat, err := s.FeishuAuth.UserAccessToken(r.Context(), caller.ID)
+	if err != nil {
+		writeDetail(w, http.StatusBadRequest, "请先绑定飞书账号后使用转发")
+		return
+	}
+	query := ""
+	if params.Query != nil {
+		query = strings.TrimSpace(*params.Query)
+	}
+	cursor := ""
+	if params.Cursor != nil {
+		cursor = strings.TrimSpace(*params.Cursor)
+	}
+	limit := 50
+	if params.Limit != nil {
+		// Strict validation, not silent normalization (七次复审 P2-5): the
+		// OpenAPI contract declares limit 1-200; an out-of-range value must
+		// get a 400 instead of being quietly clamped into a "valid" 200 —
+		// the SearchFeishuUsers internal clamp stays as defense in depth.
+		if *params.Limit < 1 || *params.Limit > 200 {
+			writeDetail(w, http.StatusBadRequest, "limit must be between 1 and 200")
+			return
+		}
+		limit = int(*params.Limit)
+	}
+	targets := make([]map[string]any, 0)
+	switch params.Type {
+	case genapi.ListFeishuForwardTargetsParamsTypeChat:
+		chats, err := s.Feishu.ListUserChats(r.Context(), uat)
+		if err != nil {
+			writeFeishuError(w, err, "获取群聊列表失败")
+			return
+		}
+		for _, c := range chats {
+			if query != "" && !strings.Contains(c.Name, query) {
+				continue
+			}
+			targets = append(targets, map[string]any{
+				"id": c.ChatID, "name": c.Name, "avatar_url": c.AvatarURL, "target_type": "chat",
+			})
+		}
+		// Chats are not cursor-paginated: the list above IS the complete set.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items": targets, "next_cursor": "", "has_more": false,
+		})
+	case genapi.ListFeishuForwardTargetsParamsTypeUser:
+		// The provider contract requires a non-empty query (七次复审 P2-4):
+		// search/v1/user marks query as REQUIRED — an empty query would be
+		// forwarded to Feishu, rejected upstream, and surface as a 502 that
+		// looks like a Feishu outage instead of a client parameter error.
+		if query == "" {
+			writeDetail(w, http.StatusBadRequest, "query is required for user target search")
+			return
+		}
+		page, err := s.Feishu.SearchFeishuUsers(r.Context(), uat, query, limit, cursor)
+		if err != nil {
+			writeFeishuError(w, err, "搜索联系人失败")
+			return
+		}
+		for _, u := range page.Users {
+			targets = append(targets, map[string]any{
+				"id": u.OpenID, "name": u.Name, "avatar_url": u.AvatarURL, "target_type": "user",
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items": targets, "next_cursor": page.PageToken, "has_more": page.HasMore,
+		})
+	default:
+		writeDetail(w, http.StatusBadRequest, "type 必须是 user 或 chat")
+		return
+	}
+}
+
+// ForwardShareToFeishu implements POST /api/v2/feishu/forward.
+func (s *Server) ForwardShareToFeishu(w http.ResponseWriter, r *http.Request) {
+	caller := userFrom(r.Context())
+	if caller == nil {
+		writeDetail(w, http.StatusUnauthorized, "Authentication credentials were not provided.")
+		return
+	}
+	if s.FeishuAuth == nil {
+		writeSimpleError(w, http.StatusInternalServerError, "feishu auth resolver unavailable")
+		return
+	}
+	var body genapi.ForwardShareToFeishuJSONBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if body.ShareToken == "" || len(body.Targets) == 0 || len(body.Targets) > feishuForwardMaxTargets {
+		writeDetail(w, http.StatusBadRequest, "share_token 与 targets（1-20 个）必填")
+		return
+	}
+	// Only the share owner may forward it.
+	share, err := s.Runs.Querier().GetConversationShareByToken(r.Context(), body.ShareToken)
+	if err != nil || share.UserID != uint64(caller.ID) || share.RevokedAt.Valid {
+		writeDetail(w, http.StatusBadRequest, "分享不存在或已撤销")
+		return
+	}
+	conv, err := s.Runs.Querier().GetConversationByID(r.Context(), share.ConversationID)
+	if err != nil {
+		writeDetail(w, http.StatusBadRequest, "分享不存在或已撤销")
+		return
+	}
+	var entries []shareMessageEntry
+	if err := json.Unmarshal(share.Snapshot, &entries); err != nil || len(entries) == 0 {
+		writeDetail(w, http.StatusBadRequest, "分享内容无效，请重新分享")
+		return
+	}
+	var messages []db.Message
+	if sharing.NeedsMessages(entries) {
+		messages, err = s.Runs.Querier().ListMessagesByConversation(r.Context(), share.ConversationID)
+		if err != nil {
+			writeSimpleError(w, http.StatusInternalServerError, "读取分享内容失败")
+			return
+		}
+	}
+	selected := sharing.Resolve(entries, messages)
+
+	uat, uatErr := s.FeishuAuth.UserAccessToken(r.Context(), caller.ID)
+	if uatErr != nil {
+		writeDetail(w, http.StatusBadRequest, "请先绑定飞书账号后使用转发")
+		return
+	}
+
+	shareURL, err := s.publicShareURL(r, body.ShareToken)
+	if err != nil {
+		writeSimpleError(w, http.StatusInternalServerError, "public site URL is not configured")
+		return
+	}
+	sender := caller.User.DisplayName
+	if sender == "" {
+		sender = caller.User.Username
+	}
+	card := feishuShareCard(sender, sharing.SnapshotTitle(entries, conv.Title), len(entries), shareURL, selected)
+	cardJSON, _ := json.Marshal(card)
+	content := string(cardJSON)
+
+	results := make([]map[string]any, 0, len(body.Targets))
+	success := 0
+	for _, t := range body.Targets {
+		if t.Id == "" || (t.TargetType != "user" && t.TargetType != "chat") {
+			results = append(results, map[string]any{"target_id": t.Id, "ok": false, "error": "无效的转发目标"})
+			continue
+		}
+		receiveIDType := "open_id"
+		if t.TargetType == "chat" {
+			receiveIDType = "chat_id"
+		}
+		err := s.Feishu.SendIMMessage(r.Context(), uat, receiveIDType, t.Id, "interactive", content)
+		ok := err == nil
+		if ok {
+			success++
+		}
+		item := map[string]any{"target_id": t.Id, "ok": ok}
+		if !ok {
+			item["error"] = feishuScopeHint(err, "发送失败")
+		}
+		results = append(results, item)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"results":       results,
+		"success_count": success,
+		"fail_count":    len(results) - success,
+	})
+}
+
+// feishuShareCard builds the interactive card payload (before JSON-encoding
+// into the message content string).
+func feishuShareCard(sender, title string, messageCount int, shareURL string, messages []sharing.Message) map[string]any {
+	sections := make([]feishucard.Section, 0, len(messages))
+	for _, m := range messages {
+		label := "回答预览"
+		if m.Role == "user" {
+			label = "提问"
+		}
+		content := m.Content
+		if strings.TrimSpace(content) == "" && len(m.Artifacts) > 0 {
+			content = "包含附件，请打开完整对话查看。"
+		}
+		sections = append(sections, feishucard.Section{Label: label, Text: content})
+	}
+	return feishucard.Build(feishucard.Options{Kind: feishucard.Conversation, Title: title,
+		Subtitle: fmt.Sprintf("%s 分享 · %d 条消息", sender, messageCount), URL: shareURL, Sections: sections})
+}
+
+// shareOrigin derives the SPA origin for the share link from the request's
+// Origin header (CORS makes every cross-origin API call carry it), falling
+// back to Referer, then the dev origin.
+func shareOrigin(r *http.Request) string {
+	if o := r.Header.Get("Origin"); o != "" {
+		if u, err := url.Parse(o); err == nil && u.Scheme != "" && u.Host != "" {
+			return u.Scheme + "://" + u.Host
+		}
+	}
+	if ref := r.Header.Get("Referer"); ref != "" {
+		if u, err := url.Parse(ref); err == nil && u.Scheme != "" && u.Host != "" {
+			return u.Scheme + "://" + u.Host
+		}
+	}
+	return "http://localhost:3030"
+}
+
+// feishuScopeHint rewrites the common permission failures into a hint the
+// sender can act on, instead of a raw Feishu error code.
+func feishuScopeHint(err error, fallback string) string {
+	if err == nil {
+		return fallback
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "99991679"):
+		return "飞书权限不足，需要重新授权（缺少转发所需的 IM / 通讯录权限）"
+	case strings.Contains(msg, "token refresh"):
+		return "飞书授权已过期，请重新绑定飞书账号"
+	default:
+		return fallback + "：" + msg
+	}
+}
+
+// writeFeishuError maps a Feishu API failure onto the response envelope.
+// Scope errors come back as 403 so the frontend offers the re-authorization
+// flow; everything else is a 502 upstream failure.
+func writeFeishuError(w http.ResponseWriter, err error, fallback string) {
+	if err != nil && strings.Contains(err.Error(), "99991679") {
+		writeDetail(w, http.StatusForbidden, feishuScopeHint(err, fallback))
+		return
+	}
+	writeSimpleError(w, http.StatusBadGateway, feishuScopeHint(err, fallback))
+}
+
+// publicShareURL uses the configured browser mount, never an Origin header that
+// cannot express a path prefix. Legacy embedders without Config retain origin inference.
+func (s *Server) publicShareURL(r *http.Request, token string) (string, error) {
+	if s.Config != nil {
+		return sharing.URL(s.Config.PublicBaseURL, token)
+	}
+	return sharing.URL(shareOrigin(r), token)
+}

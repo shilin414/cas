@@ -1,0 +1,4726 @@
+openapi: 3.0.3
+info:
+  title: xiaoan-platform API
+  version: 2.0.0
+  description: |
+    xiaoan-platform backend contract (Go control plane).
+
+    This file is the single source of truth for the HTTP API.
+    Go server types and TypeScript clients are generated from it.
+
+    ## Error envelope conventions (legacy-compatible)
+
+    The React frontend was validated against the Django reference
+    implementation, which produced four distinct error shapes:
+
+    - `{"detail": "message"}` — 403/404 style errors (DRF PermissionDenied / NotFound).
+    - `{"error": "message"}` — simple JSON errors (identity endpoints, 409/502 conflicts).
+    - `{"field": ["message", ...]}` — field validation errors (DRF serializer style).
+    - `["message"]` — bare array, 400 for hand-raised DRF ValidationErrors (e.g. "application_id is required").
+
+    All four shapes are reproduced exactly. Clients should read the
+    `detail` / `error` / first field message in that order.
+
+    ## Authentication
+
+    Normal users authenticate with the HttpOnly opaque session cookie
+    `studio_session` (set by OAuth exchange / admin login). All
+    state-changing requests additionally require the CSRF header
+    `X-CSRF-Token` matching the `studio_csrf` cookie (double-submit).
+    `GET /api/v2/artifacts/{id}/open` is cookie-authenticated because it is
+    opened via browser navigation (window.open) and cannot send headers.
+
+    ## SSE
+
+    `GET /api/v2/runs/{id}/stream` responds with `text/event-stream`.
+    Frames: `event: run.event` + `data: {run_id, sequence, event_type, payload[, created_at]}`,
+    keepalive comment lines `: keepalive` every 15s of silence.
+    Durable replay resumes STRICTLY AFTER the client cursor: precedence is
+    query `after` > `Last-Event-ID` header > 0. Transient live frames
+    (`content.delta` et al.) carry sequence 0 and deliberately write NO
+    `id:` — they never advance the cursor and are never replayed.
+    Live frames end after the first terminal event
+    (`run.completed` / `run.failed` / `run.cancelled`), then the connection
+    closes. `run.interrupted` is legacy historical compatibility only
+    (pre-closure replays); the live protocol never emits it.
+servers:
+  - url: /
+tags:
+  - name: identity
+  - name: auth
+  - name: applications
+  - name: runtimes
+  - name: runs
+  - name: artifacts
+  - name: admin-directory
+  - name: admin-access
+
+paths:
+  # ─────────────────────────────────────────────────────────── identity ──
+  /api/identity/oauth/start:
+    get:
+      operationId: oauthStart
+      tags: [identity]
+      summary: Redirect (302) the browser to the Feishu OAuth authorize page
+      parameters:
+        - name: return_to
+          in: query
+          schema: { type: string, default: "/" }
+          description: SPA path to return to after login; must start with "/" and not "//".
+      responses:
+        "302":
+          description: Redirect to Feishu authorize URL (state signed, 10 min TTL).
+          headers:
+            Location:
+              schema: { type: string }
+        "500":
+          description: OAuth not configured
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  /api/identity/oauth/exchange:
+    get:
+      operationId: oauthExchange
+      tags: [identity]
+      summary: Exchange the OAuth ?code&state for a studio session
+      description: |
+        Verifies the signed state, exchanges the code at the Feishu token
+        endpoint, upserts the local user (auth_source=feishu), stores the
+        refresh token AES-256-GCM encrypted, sets the `studio_session`
+        HttpOnly cookie and returns the session user plus JWT tokens for the
+        legacy transition window.
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Authenticated
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, tokens, return_to]
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  tokens: { $ref: "#/components/schemas/Tokens" }
+                  return_to: { type: string }
+        "400":
+          description: missing code / invalid or expired oauth state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+        "502":
+          description: oauth exchange failed / no access token / user info failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  /api/identity/session:
+    get:
+      operationId: getSession
+      tags: [identity]
+      summary: Current session user (cookie-authenticated)
+      responses:
+        "200":
+          description: Session user payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionUser" }
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  /api/identity/admin/login:
+    post:
+      operationId: adminLogin
+      tags: [identity]
+      summary: Local admin login (Argon2id password)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Admin session established
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, username, is_staff, auth_source]
+                properties:
+                  id: { type: integer }
+                  username: { type: string }
+                  is_staff: { type: boolean }
+                  auth_source: { type: string }
+                  display_name: { type: string }
+                  display_id: { type: string }
+        "401":
+          description: invalid credentials
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  # ─────────────────────────────────────────────────────────────── auth ──
+  /api/auth/login/:
+    post:
+      operationId: authLogin
+      tags: [auth]
+      summary: Local username/password login (transition window)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Logged in; also sets studio_session cookie
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, tokens]
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  tokens: { $ref: "#/components/schemas/Tokens" }
+        "401":
+          description: bad credentials
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/auth/logout/:
+    post:
+      operationId: authLogout
+      tags: [auth]
+      summary: Logout; clears the studio_session cookie
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail: { type: string }
+
+  /api/auth/token/refresh/:
+    post:
+      operationId: tokenRefresh
+      tags: [auth]
+      summary: Rotate a JWT refresh token (transition window)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh]
+              properties:
+                refresh: { type: string }
+      responses:
+        "200":
+          description: New access token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access: { type: string }
+                  refresh: { type: string }
+
+  /api/auth/me/:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Current user profile
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+    patch:
+      operationId: patchMe
+      tags: [auth]
+      summary: Update current user profile
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                email: { type: string }
+                avatar: { type: string }
+                bio: { type: string }
+                display_id: { type: string }
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+
+  # ────────────────────────────────────────────── workspace bootstrap (P1-1) ──
+  #
+  # The one request every shell surface may use to learn the small,
+  # constant-size facts it needs at start-up: which agent is the workspace
+  # default, the home shortcut groups, and the category rails. It exists to
+  # REPLACE the whole-catalog download (执行报告 §9–§11): the response is
+  # ~30 rows no matter whether the database holds 7 or 50 000 applications.
+  #
+  # The application rows here are ApplicationSummary (display fields only) —
+  # EXCEPT default_application, which additionally carries `skills` and
+  # `capabilities` because the composer bound to it renders its 技能 chips
+  # and gates the attachment entry on the runtime capabilities.
+  /api/v2/workspace/bootstrap:
+    get:
+      operationId: getWorkspaceBootstrap
+      tags: [applications]
+      summary: Start-up catalog facts (default agent, shortcut groups, categories)
+      description: |
+        Replaces the whole-catalog `GET /api/v2/applications` download the
+        shell used to perform on mount. Frontends MUST prefer this endpoint:
+        its size is independent of the catalog size.
+      responses:
+        "200":
+          description: Bootstrap payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkspaceBootstrap" }
+
+  # ─────────────────────────────────────────────────────── applications ──
+  /api/v2/applications:
+    get:
+      operationId: listApplications
+      tags: [applications]
+      summary: List openable applications (bare array, no pagination envelope)
+      parameters:
+        - name: kind
+          in: query
+          schema: { type: string, enum: [chat, task, custom, all], default: chat }
+          description: Invalid values fall back to chat.
+        - name: scope
+          in: query
+          schema: { type: string, enum: [accessible, public, mine, manage], default: public }
+          description: Invalid values fall back to public.
+        - name: include_unbound
+          in: query
+          schema: { type: string }
+          description: Truthy when case-insensitively in {1,true,yes}.
+      responses:
+        "200":
+          description: Application list items (bare array)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ApplicationListItem" }
+    post:
+      operationId: createApplication
+      tags: [applications]
+      summary: Create an application (admin only — agent marketplace "new Aily agent")
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApplicationCreateRequest" }
+      responses:
+        "201":
+          description: Created (compact detail shape)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationDetail" }
+        "400":
+          description: field errors
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FieldErrors" }
+        "403":
+          description: only admins may add agents
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/applications/page:
+    get:
+      operationId: listApplicationPage
+      tags: [applications]
+      summary: Keyset-paginated application catalog page (执行报告 §14–§17)
+      description: |
+        True server-side pagination: LIMIT / cursor-condition evaluate inside
+        SQL, one anti-joined query per page (no N+1), and personal usage /
+        favorites aggregate ONLY the ids on the returned page. The legacy
+        GET /api/v2/applications keeps its whole-catalog array shape for
+        callers not yet migrated; new surfaces must use this endpoint.
+      parameters:
+        - name: kind
+          in: query
+          schema: { type: string, enum: [chat, fixed, all], default: chat }
+          description: >
+            `fixed` means kind <> 'chat' (应用中心: pages/forms/dashboards/tasks).
+            Invalid values fall back to chat.
+        - name: scope
+          in: query
+          schema: { type: string, enum: [accessible, public, mine, manage], default: public }
+          description: Invalid values fall back to public.
+        - name: mode
+          in: query
+          schema: { type: string, enum: [manage, consume], default: manage }
+          description: >
+            WHO may see the row is `scope`; whether the row may actually be
+            USED is `mode` (二次复审 P0-5). `manage` (default) is the
+            management surface (智能体市场 / 应用中心): staff also sees
+            disabled, private and binding-less rows so they can repair them.
+            `consume` is every surface that opens or runs something
+            (切换器 / 移动端目录 / bootstrap 分组): it requires
+            `enabled = 1` and, for `kind = chat`, an enabled runtime binding
+            whose provider exists and is active — exactly the predicate
+            `AuthorizeExecution` enforces, so the UI can no longer offer an
+            application that the run API then refuses.
+        - name: include_unbound
+          in: query
+          schema: { type: string }
+          description: >
+            Truthy when case-insensitively in {1,true,yes}; keeps binding-less
+            CHAT rows (the management chat catalog's knob). It no longer
+            affects `fixed` rows in any mode: a fixed application never needs
+            a binding to be consumable, so `kind=fixed&mode=consume` returns
+            unbound fixed applications whether or not this flag is set
+            (三次复审 P1-R4).
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Case-insensitive substring match on name / description / category name.
+        - name: category_slug
+          in: query
+          schema: { type: string }
+          description: >
+            Exact category match; the sentinel `__uncategorized__` matches rows
+            without any category (mobile 其他 tab).
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 24 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque next_cursor from a previous response (base64 JSON of created_at+id).
+      responses:
+        "200":
+          description: One page of application list items (same item shape as the legacy array)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationPage" }
+        "400":
+          description: invalid cursor
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/applications/resolve:
+    get:
+      operationId: resolveApplication
+      tags: [applications]
+      summary: Resolve ONE application by slug or id (执行报告 §12)
+      description: >
+        Exact single-row resolution for deep links (/chat/:slug, /app/:slug) and
+        for the application entity cache. Visibility is evaluated with the
+        enterprise access policy (legacy is_public while the rollout flag is off;
+        Directory + Application ACL when enabled; staff bypass ACL); then consumption eligibility is applied: the application
+        must be enabled and a chat application must have an enabled binding
+        backed by an active provider. It answers 404 when the application does
+        not exist OR is not visible/consumable — existence is never leaked. This is what makes
+        "open /chat/sales" cost one small request instead of a catalog
+        download plus Array.find().
+      parameters:
+        - name: slug
+          in: query
+          schema: { type: string }
+          description: Exact slug. Provide this or `id`.
+        - name: id
+          in: query
+          schema: { type: integer }
+          description: Exact application id. Provide this or `slug`.
+      responses:
+        "200":
+          description: The application, in the same shape the catalog page uses
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationListItem" }
+        "400":
+          description: neither slug nor id was provided
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "404":
+          description: unknown, not visible, or not usable by this caller
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/applications/resolve-mention:
+    get:
+      operationId: resolveApplicationMention
+      tags: [applications]
+      summary: Resolve the `@` token of a composer instruction to candidates (§14)
+      description: >
+        Server-side replacement for the client-side @mention candidate array
+        (which was built by downloading every application). Matching is
+        case-insensitive on the application name and slug; the response is
+        ranked (exact name/slug first, then name prefix, then slug prefix,
+        then substring) and capped, so the composer never needs the whole catalog
+        to route `@销售助手 帮我查一下`.
+
+        Like `resolve`, this is a CONSUMPTION entry point (二次复审 P0-5): only
+        usable applications are candidates, so `@` can never switch the
+        composer to an application the next send would be refused for.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+          description: The text after `@`, e.g. `销售助手`.
+      responses:
+        "200":
+          description: Ranked candidates (at most 10)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MentionCandidate" }
+        "400":
+          description: q is required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/applications/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ApplicationId"
+    get:
+      operationId: getApplication
+      tags: [applications]
+      summary: Application detail (compact authoring shape, manage-only)
+      description: >
+        Carries provider-authoring fields (`external_resource_id`,
+        `identity_mode`, `execution_mode`), so it is NOT a public read: the
+        caller must be authenticated and must be able to MANAGE the
+        application (staff only). Visible-to-all
+        used to hand every logged-in caller back the authoring fields the
+        consumer DTO split had removed from list/resolve. Consumers read
+        through /applications/resolve, /applications/page and
+        /workspace/bootstrap instead. Non-manageable and nonexistent both
+        answer 404 — otherwise the sequential id would let any logged-in
+        user enumerate every agent's provider resource id.
+      responses:
+        "200":
+          description: Detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationDetail" }
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "404":
+          description: unknown or not manageable by this caller
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+    patch:
+      operationId: updateApplication
+      tags: [applications]
+      summary: Update an application / rebind runtime (staff only)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApplicationUpdateRequest" }
+      responses:
+        "200":
+          description: Updated (compact shape)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationDetail" }
+        "404":
+          description: unknown or not manageable (opaque — sequential ids must not be enumerable, 三次复审 P0-R4.2)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+    delete:
+      operationId: deleteApplication
+      tags: [applications]
+      summary: Delete an application (409 when referenced by conversations/runs)
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: unknown or not manageable (opaque — 三次复审 P0-R4.2)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "409":
+          description: has conversations or runs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/applications/{id}/favorite:
+    parameters:
+      - $ref: "#/components/parameters/ApplicationId"
+    post:
+      operationId: favoriteApplication
+      tags: [applications]
+      summary: Pin application (idempotent, visibility-checked)
+      description: >
+        三次复审 P0-R4.3: the favorite relation exists only for applications
+        the caller can SEE, so a hidden-but-real id answers the same opaque
+        404 as an unknown one — favoriting must not become an existence
+        oracle. Fixed applications keep their favorite relation (the ✩).
+      responses:
+        "200":
+          description: Favorite state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FavoriteResult" }
+        "404":
+          description: application not found (or not visible — indistinguishable on purpose)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+    delete:
+      operationId: unfavoriteApplication
+      tags: [applications]
+      summary: Unpin application (idempotent, visibility-checked)
+      responses:
+        "200":
+          description: Favorite state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FavoriteResult" }
+        "404":
+          description: application not found (or not visible — indistinguishable on purpose)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/applications/{id}/avatar:
+    parameters:
+      - $ref: "#/components/parameters/ApplicationId"
+    get:
+      operationId: getApplicationAvatar
+      tags: [applications]
+      summary: Stream avatar image bytes (session-authenticated, visibility-checked)
+      description: >
+        NOT a public route (二次复审 P0-4): it used to sit in `publicRoutes`,
+        which made every avatar readable by id without a session and turned
+        the sequential application id into an enumeration oracle. An `<img>`
+        on a studio page is a same-origin request and already carries the
+        Studio Session cookie, so authentication costs nothing. The
+        Visibility is checked before any network ETag / 304 response.
+        `Vary: Cookie` partitions browser cache variants across authenticated
+        sessions. Stored responses use `private, no-cache` so every reuse
+        revalidates authorization through ETag before returning 304.
+      responses:
+        "200":
+          description: Stored image bytes, or a no-store SVG fallback when the storage object is missing
+          content:
+            image/png: {}
+            image/jpeg: {}
+            image/gif: {}
+            image/webp: {}
+            image/svg+xml: {}
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "404":
+          description: avatar not set, or application not visible to this caller
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+    post:
+      operationId: uploadApplicationAvatar
+      tags: [applications]
+      summary: Replace avatar (static png/jpg/jpeg/gif/webp; ≤ 1024×1024 and ≤ 2MB)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Updated (compact shape)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationDetail" }
+        "400":
+          description: field errors, including unsupported extensions, animation, dimensions, or invalid image bytes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FieldErrors" }
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "404":
+          description: application not found or not manageable (opaque)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "409":
+          description: avatar changed concurrently; retry with fresh state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "413":
+          description: multipart request envelope exceeds the upload limit
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "503":
+          description: avatar decoder capacity is temporarily exhausted
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+    delete:
+      operationId: clearApplicationAvatar
+      tags: [applications]
+      summary: Clear avatar (falls back to emoji icon)
+      responses:
+        "200":
+          description: Updated (compact shape)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationDetail" }
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "404":
+          description: application not found or not manageable (opaque)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "409":
+          description: avatar changed concurrently; retry with fresh state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/applications/{id}/default-agent:
+    parameters:
+      - $ref: "#/components/parameters/ApplicationId"
+    post:
+      operationId: setDefaultAgent
+      tags: [applications]
+      summary: Set as workspace main agent (chat + enabled binding only)
+      responses:
+        "200":
+          description: Updated (compact shape)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationDetail" }
+        "400":
+          description: not eligible
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "403":
+          description: staff only
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+    delete:
+      operationId: unsetDefaultAgent
+      tags: [applications]
+      summary: Unset workspace main agent
+      responses:
+        "200":
+          description: Updated (compact shape)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationDetail" }
+
+  /api/v2/applications/{id}/attachments:
+    parameters:
+      - $ref: "#/components/parameters/ApplicationId"
+    post:
+      operationId: uploadApplicationAttachment
+      tags: [applications]
+      summary: Pre-run attachment upload (stored in studio storage; the worker uploads to the provider with the user's UAT)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                type:
+                  type: string
+                  enum: [image, file, feishu_doc, bitable]
+                  default: file
+                doc_url:
+                  type: string
+      responses:
+        "201":
+          description: Attachment created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RuntimeAttachment" }
+        "400":
+          description: file or doc_url required / binding missing
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/DetailError" }
+                  - { $ref: "#/components/schemas/BareError" }
+                  - { $ref: "#/components/schemas/FieldErrors" }
+        "502":
+          description: attachment upload failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  # ───────────────────────────────────────────────────────── schedules ──
+  /api/v2/schedules:
+    get:
+      operationId: listSchedules
+      tags: [schedules]
+      summary: List the caller's schedules (keyset pagination)
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [all, running, paused, failed], default: all }
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 200 }
+          description: >
+            Server-side substring search on the schedule name. The needle is
+            escaped (`%`, `_`, `\` compared literally) and the comparison is
+            collated utf8mb4_unicode_ci, so it stays case-insensitive for
+            ASCII like the client-side filter it replaced.
+        - name: before_id
+          in: query
+          schema: { type: integer }
+          description: Keyset cursor — return schedules with id < before_id.
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 100 }
+      responses:
+        "200":
+          description: Schedule page (bare array; empty means no more)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Schedule" }
+        "400":
+          description: q exceeds 200 characters (runtime rune-count guard)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+    post:
+      operationId: createSchedule
+      tags: [schedules]
+      summary: Create a schedule (owner = caller; enabled by default)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduleUpsertRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Schedule" }
+        "400":
+          description: field errors
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FieldErrors" }
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/schedules/preview:
+    post:
+      operationId: previewScheduleRuns
+      tags: [schedules]
+      summary: Compute the next trigger times for a candidate trigger (no side effects)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduleUpsertRequest" }
+      responses:
+        "200":
+          description: Next trigger times (UTC ISO-8601), at most 3
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  next_runs:
+                    type: array
+                    items: { type: string, format: date-time }
+        "400":
+          description: invalid trigger
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FieldErrors" }
+
+  /api/v2/schedules/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ScheduleId"
+    get:
+      operationId: getSchedule
+      tags: [schedules]
+      summary: Schedule detail
+      responses:
+        "200":
+          description: Schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Schedule" }
+        "404":
+          description: unknown or foreign schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+    patch:
+      operationId: updateSchedule
+      tags: [schedules]
+      summary: Update a schedule (next_run_at recomputed from now)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScheduleUpsertRequest" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Schedule" }
+        "400":
+          description: field errors
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FieldErrors" }
+        "404":
+          description: unknown or foreign schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+    delete:
+      operationId: deleteSchedule
+      tags: [schedules]
+      summary: Delete a schedule (occurrence/run/delivery history is kept)
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: unknown or foreign schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/schedules/{id}/enable:
+    parameters:
+      - $ref: "#/components/parameters/ScheduleId"
+    post:
+      operationId: enableSchedule
+      tags: [schedules]
+      summary: Enable a schedule (next_run_at recomputed from now; missed slots are not replayed)
+      responses:
+        "200":
+          description: Updated schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Schedule" }
+        "404":
+          description: unknown or foreign schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/schedules/{id}/disable:
+    parameters:
+      - $ref: "#/components/parameters/ScheduleId"
+    post:
+      operationId: disableSchedule
+      tags: [schedules]
+      summary: Disable a schedule (no new occurrences; already queued runs are kept)
+      responses:
+        "200":
+          description: Updated schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Schedule" }
+        "404":
+          description: unknown or foreign schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/schedules/{id}/run-now:
+    parameters:
+      - $ref: "#/components/parameters/ScheduleId"
+    post:
+      operationId: runScheduleNow
+      tags: [schedules]
+      summary: Trigger one real occurrence now (overlap policy applies; next_run_at untouched)
+      responses:
+        "202":
+          description: Occurrence created and run queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScheduleOccurrence" }
+        "404":
+          description: unknown or foreign schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "409":
+          description: overlap policy skip and a previous run is still active
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/schedules/{id}/occurrences:
+    parameters:
+      - $ref: "#/components/parameters/ScheduleId"
+    get:
+      operationId: listScheduleOccurrences
+      tags: [schedules]
+      summary: Execution history (keyset pagination, newest first)
+      parameters:
+        - name: before_id
+          in: query
+          schema: { type: integer }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 100 }
+      responses:
+        "200":
+          description: Occurrence page (bare array)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ScheduleOccurrence" }
+        "404":
+          description: unknown or foreign schedule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  # ─────────────────────────────────────────────────────────── runtimes ──
+  /api/v2/runtimes:
+    get:
+      operationId: listRuntimes
+      tags: [runtimes]
+      summary: Runtime catalog (active providers × registered adapters)
+      responses:
+        "200":
+          description: Runtime descriptors (bare array)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RuntimeDescriptor" }
+
+  /api/v2/runtimes/validate:
+    post:
+      operationId: validateRuntime
+      tags: [runtimes]
+      summary: Validate resource id format + remote visibility (best-effort)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider_key, runtime_type]
+              properties:
+                provider_key: { type: string }
+                runtime_type: { type: string, default: agent }
+                external_resource_id: { type: string }
+                identity_mode: { type: string, default: user }
+      responses:
+        "200":
+          description: Validation outcome (checked=false means skipped, not failed)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RuntimeValidationResult" }
+        "400":
+          description: field errors
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FieldErrors" }
+
+  # ─────────────────────────────────────────────────────────────── runs ──
+  /api/v2/runs:
+    post:
+      operationId: createRun
+      tags: [runs]
+      summary: Create a run (lazily creates the conversation when conversation_id is absent)
+      description: |
+        With a `client_request_id` the request is IDEMPOTENT: an identical
+        resend returns the ORIGINAL run with HTTP 200 and
+        `idempotency_replayed=true` instead of creating a second run, user
+        message and provider chat. Reusing the id with a different payload is
+        rejected with HTTP 409 `idempotency_key_reused`.
+
+        The identity is reserved inside the run-creation transaction and is
+        checked before authorization, rate limiting and attachment
+        validation, so a resend is never misreported as a limit violation for
+        a request that already succeeded.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRunRequest" }
+      responses:
+        "200":
+          description: Idempotent replay — the original run for this client_request_id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "201":
+          description: Run created (status=queued)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "400":
+          description: validation errors (bare array style)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/BareError" }
+                  - { $ref: "#/components/schemas/FieldErrors" }
+        "409":
+          description: idempotency_key_reused — the client_request_id is bound to another payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/runs/{runId}:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: getRun
+      tags: [runs]
+      summary: Run detail (owner or staff only; unknown ids return 404)
+      responses:
+        "200":
+          description: Run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "404":
+          description: run not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/runs/{runId}/events:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+      - name: after
+        in: query
+        schema: { type: integer, minimum: 0, default: 0 }
+        description: Return events with sequence > after (ascending). Keyset cursor.
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+        description: Page size (default 200, maximum 1000).
+    get:
+      operationId: listRunEvents
+      tags: [runs]
+      summary: One keyset page of persisted run events (replay after reconnect)
+      description: |
+        Keyset pagination over (run_id, sequence) — no OFFSET, so page N costs
+        the same as page 1. Walk by feeding `next_after` back into `after`
+        while `has_more` is true.
+      responses:
+        "200":
+          description: Event page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunEventPage" }
+        "404":
+          description: run not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/runs/{runId}/stream:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+      - name: after
+        in: query
+        schema: { type: integer, minimum: 0, default: 0 }
+        description: >-
+          Durable cursor: replay only events with sequence > after. Takes
+          precedence over the Last-Event-ID header.
+      - name: stream_protocol
+        in: query
+        required: false
+        schema:
+          type: integer
+          enum: [1, 2]
+          default: 1
+        description: |
+          SSE rendering capability the client requests.
+
+          Protocol 2 declares support for UTF-8 byte-offset reconciliation
+          between transient `content.delta` and durable `content.chunk`.
+          Legacy clients receive durable chunks but no transient
+          `content.delta` frames.
+
+          This is a request, not a decision: the value is NEGOTIATED. A client
+          normally sends 1 or 2, and if a future client requests a higher
+          positive protocol the server serves the highest protocol it
+          currently supports (2) rather than echoing the request back — a
+          server cannot claim a rendering contract it does not implement.
+
+          Malformed, zero, negative or overflowing values degrade to legacy
+          protocol 1. Nothing here fails the stream: a client that cannot see
+          the server was upgraded must keep working, and the safe direction of
+          a capability negotiation is the smaller feature set.
+
+          The negotiated value is what appears in the
+          `X-Studio-Stream-Protocol` response header and as the `protocol`
+          label of `studio_sse_stream_protocol_total`, so it is always exactly
+          1 or 2.
+    get:
+      operationId: streamRun
+      tags: [runs]
+      summary: SSE stream (paged DB replay from the durable cursor, then Redis live frames)
+      description: |
+        `text/event-stream`. Durable frames:
+
+        `event: run.event\nid: <sequence>\ndata: {"run_id","sequence","event_type","payload"}\n\n`
+
+        The `id:` line carries the durable run sequence, so a reconnecting
+        client can resume from the last event it processed: either by sending
+        `?after=<sequence>` or by letting EventSource replay `Last-Event-ID`.
+        Precedence is query `after` > `Last-Event-ID` > 0.
+
+        TRANSIENT frames (content.delta, fanned out live without being
+        persisted) carry sequence 0 and deliberately write NO `id:` — sequence
+        0 is a sentinel, and writing it would reset the browser's cursor to
+        the beginning of the run.
+
+        PROTOCOL NEGOTIATION: `content.delta` is sent only to
+        `stream_protocol >= 2` clients. Both `content.delta` and
+        `content.chunk` carry an absolute UTF-8 BYTE end offset in their
+        payload, and a transient delta may be observed AFTER the durable chunk
+        holding the same bytes — so a client that cannot reconcile by byte
+        range (i.e. does not declare protocol 2) would render the overlap
+        twice. It receives the durable chunks instead, which are written within
+        ~500ms / ~2KB of the bytes being produced: coarser cadence, never a
+        lost or duplicated answer. `stream_protocol` is independent of `after`
+        / Last-Event-ID (a rendering capability is not a cursor position) and
+        must be declared on every connection.
+
+        The response carries `X-Studio-Stream-Protocol: <negotiated>` for
+        browser Network panels, logs and canary triage; clients must not branch
+        on it.
+
+        Keepalive comment `: keepalive` after 15s of silence.
+        Closes after replay when the run is already terminal, or after the
+        first terminal live event.
+      responses:
+        "200":
+          description: SSE stream
+          headers:
+            X-Studio-Stream-Protocol:
+              description: >-
+                The protocol the response was rendered for (1 = durable only,
+                2 = transient deltas included). This is the negotiated value,
+                so it is always 1 or 2 — never the raw requested integer.
+              schema: { type: integer, enum: [1, 2] }
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          description: run not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/runs/{runId}/commands:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: createRunCommand
+      tags: [runs]
+      summary: Issue a run command (cancel / respond / resume)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRunCommandRequest" }
+      responses:
+        "201":
+          description: Command recorded (status=pending)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunCommand" }
+        "400":
+          description: field errors
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FieldErrors" }
+        "404":
+          description: run not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "409":
+          description: provider does not support cancel
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  /api/v2/runs/{runId}/attachments:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: uploadRunAttachment
+      tags: [runs]
+      summary: Attach a file to a queued run
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                type:
+                  type: string
+                  enum: [image, file, feishu_doc, bitable]
+                  default: file
+                doc_url:
+                  type: string
+      responses:
+        "201":
+          description: Attachment bound to the run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RuntimeAttachment" }
+        "404":
+          description: run not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "409":
+          description: run no longer queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+        "502":
+          description: attachment upload failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  /api/v2/runs/{runId}/artifacts:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: listRunArtifacts
+      tags: [runs]
+      summary: Artifacts of a run (created_at ascending)
+      responses:
+        "200":
+          description: Artifacts (bare array)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RunArtifact" }
+        "404":
+          description: run not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/conversations/{conversationId}/runs:
+    parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      operationId: listConversationRuns
+      tags: [runs]
+      summary: Runs of a conversation (newest first, owner only)
+      responses:
+        "200":
+          description: Runs (bare array)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Run" }
+        "404":
+          description: conversation not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  # ─────────────────────────────────────────────────────────── artifacts ──
+  /api/v2/artifacts/{artifactId}/open:
+    parameters:
+      - name: artifactId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: openArtifact
+      tags: [artifacts]
+      summary: Resolve artifact URL (24h cache refresh) and 302 to the provider URL
+      description: Cookie-authenticated (browser navigation). The provider
+        signed URL is cached for 23h and refreshed when <25min of validity
+        remain. The long-term reference is external_artifact_id, never the URL.
+      responses:
+        "302":
+          description: Redirect to provider URL
+          headers:
+            Location:
+              schema: { type: string }
+        "404":
+          description: artifact not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "502":
+          description: resolution failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  # ───────────────────────────────────────────────────────────── tasks ──
+  /api/v2/tasks:
+    get:
+      operationId: listTasks
+      tags: [tasks]
+      summary: Keyset-paginated user task list backed by conversations
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 200 }
+        - name: application_id
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Bounded task page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskPage" }
+        "400":
+          description: invalid cursor or query
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/tasks/{taskId}:
+    parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    patch:
+      operationId: updateTask
+      tags: [tasks]
+      summary: Rename one owned task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskUpdateRequest" }
+      responses:
+        "200":
+          description: Updated task summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskSummary" }
+        "400":
+          description: invalid title
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "404":
+          description: task not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+    delete:
+      operationId: deleteTask
+      tags: [tasks]
+      summary: Delete one owned task using the conversation cascade
+      responses:
+        "204": { description: Deleted }
+        "404":
+          description: task not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  # ─────────────────────────────────────────────────────── conversations ──
+  /api/conversations/:
+    get:
+      operationId: listConversations
+      tags: [runs]
+      summary: Conversation list for the history sidebar (newest first)
+      parameters:
+        - name: application_id
+          in: query
+          schema: { type: integer }
+          description: Restrict to one application.
+      responses:
+        "200":
+          description: Bare array (or {results} envelope is accepted by the client)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ConversationSummary" }
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/conversations/{conversationId}/:
+    parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      operationId: getConversation
+      tags: [runs]
+      summary: Conversation detail with messages (history replay + deep-link resolve)
+      responses:
+        "200":
+          description: Conversation with messages (owner only)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationDetail" }
+        "404":
+          description: conversation not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/conversations/{conversationId}/delete_conversation/:
+    parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: integer }
+    delete:
+      operationId: deleteConversation
+      tags: [runs]
+      summary: Delete a conversation and its messages/runs (owner only)
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail: { type: string }
+        "404":
+          description: not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/conversations/{conversationId}/clear/:
+    parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: integer }
+    delete:
+      operationId: clearConversation
+      tags: [runs]
+      summary: Delete the conversation's messages (keep the conversation)
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail: { type: string }
+
+  # ──────────────────────────────────────────────── conversation shares ──
+  /api/v2/conversations/{conversationId}/shares:
+    parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: integer }
+    post:
+      operationId: createConversationShare
+      tags: [runs]
+      summary: Create a read-only share snapshot of selected messages (owner only)
+      description: |
+        Server-side snapshot: the selected message ids are persisted with a
+        random unguessable token. The public read endpoint
+        (GET /api/v2/public/shares/{token}) returns ONLY those messages —
+        filtering never happens on the client, so a shared link cannot be
+        stripped down to reveal the rest of the conversation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message_ids]
+              properties:
+                message_ids:
+                  type: array
+                  minItems: 1
+                  description: Ids of the messages to include (must belong to this conversation).
+                  items: { type: integer }
+      responses:
+        "200":
+          description: Share created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConversationShare" }
+        "400":
+          description: empty list or ids outside this conversation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "404":
+          description: conversation not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/conversations/{conversationId}/shares/{shareToken}:
+    parameters:
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: shareToken
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: revokeConversationShare
+      tags: [runs]
+      summary: Revoke a share (owner only); public links stop resolving immediately
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail: { type: string }
+        "404":
+          description: conversation or share not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/public/shares/{shareToken}:
+    parameters:
+      - name: shareToken
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getPublicShare
+      tags: [runs]
+      summary: Public read-only share payload (no authentication)
+      description: Returns the conversation title and ONLY the snapshotted
+        messages (with their artifact references). Revoked or unknown tokens
+        resolve to 404.
+      responses:
+        "200":
+          description: Shared messages (snapshot only)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicShareDetail" }
+        "404":
+          description: share not found or revoked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+
+  /api/v2/public/shares/{shareToken}/artifacts/{artifactId}/open:
+    parameters:
+      - name: shareToken
+        in: path
+        required: true
+        schema: { type: string }
+      - name: artifactId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: openPublicShareArtifact
+      tags: [runs]
+      summary: Resolve an artifact of a share snapshot (no authentication) and 302 to the provider URL
+      description: |
+        Token-scoped variant of the artifact /open resolver: the artifact must
+        be referenced by one of the snapshotted messages, otherwise 404. The
+        image bytes are fetched by the receiver's browser straight from the
+        provider's signed URL — this service never stores or proxies them.
+      responses:
+        "302":
+          description: Redirect to provider URL
+          headers:
+            Location:
+              schema: { type: string }
+        "404":
+          description: share/artifact not found or not part of the snapshot
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "502":
+          description: resolution failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  # ────────────────────────────────────────────── feishu forwarding ──
+  /api/v2/feishu/forward/targets:
+    get:
+      operationId: listFeishuForwardTargets
+      tags: [runs]
+      summary: Feishu forward targets (contacts or groups) for the caller
+      description: |
+        One page of targets plus a continuation cursor. user targets come
+        from the Feishu user search (search/v1/user, user_access_token
+        only) and paginate with the provider's page_token; chat targets are
+        always returned IN FULL in a single response (the backend follows
+        the provider's pagination to has_more=false), so the cursor only
+        applies to type=user.
+      parameters:
+        - name: type
+          in: query
+          required: true
+          schema: { type: string, enum: [user, chat] }
+          description: user = org directory search, chat = the caller's groups.
+        - name: query
+          in: query
+          schema: { type: string }
+          description: |
+            Name search. REQUIRED for type=user (the Feishu search/v1/user
+            endpoint marks query as required — an empty query is rejected
+            with 400 instead of being forwarded upstream). For chat targets
+            the query filters the caller's chat list (applied server-side
+            after the full list is read) and is optional.
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: |
+            Continuation token for type=user (the next_cursor from the
+            previous response, i.e. the provider's page_token). Ignored
+            for type=chat.
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+          description: Page size for type=user (provider range 1-200, default
+            50). Out-of-range values are rejected with 400 — they are not
+            silently clamped.
+      responses:
+        "200":
+          description: One page of targets plus the continuation cursor
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeishuForwardTargetPage" }
+        "400":
+          description: |
+            caller has no bound Feishu identity / bad type / empty query
+            with type=user / limit outside 1-200
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "403":
+          description: Feishu authorization lacks required scopes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "500":
+          description: forwarding integration unavailable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+        "502":
+          description: Feishu upstream failure
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  /api/v2/feishu/forward:
+    post:
+      operationId: forwardShareToFeishu
+      tags: [runs]
+      summary: Deliver a share snapshot card to Feishu users/groups (owner only)
+      description: Sends an interactive card carrying the share link. The link
+        origin comes from the request Origin header. Messages are sent with
+        the caller's Feishu user access token only, so delivery keeps the
+        caller's identity (the forward UI presents the send as coming from
+        the user; there is no app-token fallback). Per-target delivery
+        failures are returned in the result envelope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [share_token, targets]
+              properties:
+                share_token: { type: string }
+                targets:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items:
+                    type: object
+                    required: [target_type, id]
+                    properties:
+                      target_type: { type: string, enum: [user, chat] }
+                      id: { type: string }
+      responses:
+        "200":
+          description: Per-target delivery results
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeishuForwardResult" }
+        "400":
+          description: |
+            Invalid body / share not owned by caller or revoked /
+            caller has no usable bound Feishu identity.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "401":
+          description: not authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DetailError" }
+        "500":
+          description: forwarding integration unavailable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SimpleError" }
+
+  # ─────────────────────────────────────────────────────────────── auth ──
+  /api/auth/register/:
+    post:
+      operationId: authRegister
+      tags: [auth]
+      summary: Local account registration (password stored Argon2id)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, password_confirm]
+              properties:
+                username: { type: string }
+                email: { type: string }
+                password: { type: string, format: password }
+                password_confirm: { type: string, format: password }
+      responses:
+        "201":
+          description: Registered (session cookie set)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  tokens: { $ref: "#/components/schemas/Tokens" }
+        "400":
+          description: field errors
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FieldErrors" }
+
+  # ───────────────────────────────────────── legacy compat shims ──
+  # The local "creative agents" (Django Agent model) become Applications in
+  # G12; until then these return empty collections so the marketplace and
+  # editor render runtime agents without error toasts.
+  /api/agents/:
+    get:
+      operationId: listLegacyAgents
+      tags: [applications]
+      summary: Local creative agents (legacy) — empty until G12
+      responses:
+        "200":
+          description: Bare array
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+
+  /api/agents/categories/:
+    get:
+      operationId: listLegacyAgentCategories
+      tags: [applications]
+      summary: Local agent categories (legacy) — empty until G12
+      responses:
+        "200":
+          description: Bare array
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+
+  /api/apps/skills/:
+    get:
+      operationId: listSkills
+      tags: [applications]
+      summary: Skill catalog (legacy) — empty until G12
+      responses:
+        "200":
+          description: Bare array
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+
+
+  # ───────────────────────────────────────────────── enterprise admin ──
+  /api/v2/admin/directory/departments:
+    get:
+      operationId: listAdminDirectoryDepartments
+      tags: [admin-directory]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: parent_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: include_inactive, in: query, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: Directory departments
+          content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/DirectoryDepartment" } } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+
+  /api/v2/admin/directory/departments/page:
+    get:
+      operationId: listAdminDirectoryDepartmentPage
+      tags: [admin-directory]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: include_inactive, in: query, schema: { type: boolean, default: false } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        "200":
+          description: Paged directory departments
+          content: { application/json: { schema: { $ref: "#/components/schemas/DirectoryDepartmentPage" } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+
+  /api/v2/admin/directory/stats:
+    get:
+      operationId: getAdminDirectoryStats
+      tags: [admin-directory]
+      responses:
+        "200": { description: Directory validation counters, content: { application/json: { schema: { $ref: "#/components/schemas/DirectoryStats" } } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+
+  /api/v2/admin/directory/users:
+    get:
+      operationId: listAdminDirectoryUsers
+      tags: [admin-directory]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: department_id, in: query, schema: { type: integer, format: int64 } }
+        - { name: include_inactive, in: query, schema: { type: boolean, default: false } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        "200":
+          description: Directory users
+          content: { application/json: { schema: { $ref: "#/components/schemas/DirectoryUserPage" } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+
+  /api/v2/admin/directory/sync-config:
+    get:
+      operationId: getAdminDirectorySyncConfig
+      tags: [admin-directory]
+      responses:
+        "200": { description: Sync config, content: { application/json: { schema: { $ref: "#/components/schemas/DirectorySyncConfig" } } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+    put:
+      operationId: updateAdminDirectorySyncConfig
+      tags: [admin-directory]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/DirectorySyncConfigUpdate" } } }
+      responses:
+        "200": { description: Updated config, content: { application/json: { schema: { $ref: "#/components/schemas/DirectorySyncConfig" } } } }
+        "400": { description: Invalid config, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+
+  /api/v2/admin/directory/sync:
+    post:
+      operationId: triggerAdminDirectorySync
+      tags: [admin-directory]
+      responses:
+        "202": { description: Queued sync, content: { application/json: { schema: { $ref: "#/components/schemas/DirectorySyncRun" } } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+
+  /api/v2/admin/directory/sync-runs:
+    get:
+      operationId: listAdminDirectorySyncRuns
+      tags: [admin-directory]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        "200": { description: Sync runs, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/DirectorySyncRun" } } } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+
+  /api/v2/admin/directory/sync-runs/{id}:
+    get:
+      operationId: getAdminDirectorySyncRun
+      tags: [admin-directory]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200": { description: Sync run, content: { application/json: { schema: { $ref: "#/components/schemas/DirectorySyncRun" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+
+  /api/v2/admin/applications/{id}/access:
+    get:
+      operationId: getAdminApplicationAccess
+      tags: [admin-access]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200": { description: Access policy, content: { application/json: { schema: { $ref: "#/components/schemas/ApplicationAccessPolicy" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+    put:
+      operationId: updateAdminApplicationAccess
+      tags: [admin-access]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ApplicationAccessUpdate" } } }
+      responses:
+        "200": { description: Updated policy, content: { application/json: { schema: { $ref: "#/components/schemas/ApplicationAccessPolicy" } } } }
+        "400": { description: Invalid grant, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+
+  /api/v2/admin/audit-logs:
+    get:
+      operationId: listAdminAuditLogs
+      tags: [admin-access]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+      responses:
+        "200": { description: Audit log rows, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AuditLog" } } } } }
+        "403": { description: staff only, content: { application/json: { schema: { $ref: "#/components/schemas/DetailError" } } } }
+
+
+  /api/v2/admin/me:
+    get:
+      operationId: getAdminMe
+      tags: [admin-rbac]
+      responses:
+        "200": { description: Current administrator identity, content: { application/json: { schema: { $ref: "#/components/schemas/AdminMe" } } } }
+
+  /api/v2/admin/permissions:
+    get:
+      operationId: listAdminPermissions
+      tags: [admin-rbac]
+      responses:
+        "200": { description: Permission catalog, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AdminPermission" } } } } }
+
+  /api/v2/admin/roles:
+    get:
+      operationId: listAdminRoles
+      tags: [admin-rbac]
+      responses:
+        "200": { description: Roles, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AdminRole" } } } } }
+    post:
+      operationId: createAdminRole
+      tags: [admin-rbac]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminRoleInput" } } } }
+      responses:
+        "201": { description: Created role, content: { application/json: { schema: { $ref: "#/components/schemas/AdminRole" } } } }
+
+  /api/v2/admin/roles/{id}:
+    get:
+      operationId: getAdminRole
+      tags: [admin-rbac]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses: { "200": { description: Role, content: { application/json: { schema: { $ref: "#/components/schemas/AdminRole" } } } } }
+    patch:
+      operationId: updateAdminRole
+      tags: [admin-rbac]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdminRoleInput" } } } }
+      responses: { "200": { description: Updated role, content: { application/json: { schema: { $ref: "#/components/schemas/AdminRole" } } } } }
+    delete:
+      operationId: deleteAdminRole
+      tags: [admin-rbac]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses: { "204": { description: Deleted } }
+
+  /api/v2/admin/administrators:
+    get:
+      operationId: listAdminAdministrators
+      tags: [admin-rbac]
+      responses:
+        "200": { description: Administrators, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Administrator" } } } } }
+    post:
+      operationId: createAdminAdministrator
+      tags: [admin-rbac]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdministratorInput" } } } }
+      responses: { "201": { description: Administrator, content: { application/json: { schema: { $ref: "#/components/schemas/Administrator" } } } } }
+
+  /api/v2/admin/administrators/{id}:
+    patch:
+      operationId: updateAdminAdministrator
+      tags: [admin-rbac]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AdministratorInput" } } } }
+      responses: { "200": { description: Administrator, content: { application/json: { schema: { $ref: "#/components/schemas/Administrator" } } } } }
+    delete:
+      operationId: deleteAdminAdministrator
+      tags: [admin-rbac]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses: { "204": { description: Removed } }
+
+  /api/v2/admin/access-groups:
+    get:
+      operationId: listAdminAccessGroups
+      tags: [admin-access-group]
+      parameters: [{ name: source_type, in: query, schema: { type: string, enum: [local, feishu] } }]
+      responses:
+        "200": { description: Access groups, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AccessGroup" } } } } }
+    post:
+      operationId: createAdminAccessGroup
+      tags: [admin-access-group]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AccessGroupInput" } } } }
+      responses: { "201": { description: Created group, content: { application/json: { schema: { $ref: "#/components/schemas/AccessGroup" } } } } }
+
+  /api/v2/admin/access-groups/{id}:
+    get:
+      operationId: getAdminAccessGroup
+      tags: [admin-access-group]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses: { "200": { description: Access group, content: { application/json: { schema: { $ref: "#/components/schemas/AccessGroup" } } } } }
+    patch:
+      operationId: updateAdminAccessGroup
+      tags: [admin-access-group]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AccessGroupInput" } } } }
+      responses: { "200": { description: Updated group, content: { application/json: { schema: { $ref: "#/components/schemas/AccessGroup" } } } } }
+    delete:
+      operationId: deleteAdminAccessGroup
+      tags: [admin-access-group]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses: { "204": { description: Deleted }, "409": { description: Group is in use } }
+
+  /api/v2/admin/access-groups/{id}/members:
+    get:
+      operationId: listAdminAccessGroupMembers
+      tags: [admin-access-group]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses: { "200": { description: Members, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AccessGroupMember" } } } } } }
+
+  /api/v2/admin/access-groups/{id}/applications:
+    get:
+      operationId: listAdminAccessGroupApplications
+      tags: [admin-access-group]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses: { "200": { description: Applications, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AccessGroupApplication" } } } } } }
+
+  /api/v2/admin/access/diagnose:
+    post:
+      operationId: diagnoseAdminAccess
+      tags: [admin-access]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AccessDiagnosisInput" } } } }
+      responses:
+        "200": { description: Access decision, content: { application/json: { schema: { $ref: "#/components/schemas/AccessDecision" } } } }
+
+  /api/v2/admin/ai-models/connections:
+    get:
+      operationId: ListAIConnections
+      tags:
+      - AI models
+      description: Requires ai.model.read.
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AIConnection'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+    post:
+      operationId: CreateAIConnection
+      tags:
+      - AI models
+      description: Requires ai.model.write; credential additionally requires ai.connection.secret.write.
+        HTTPS by default. HTTP/private hosts require exact deployment AI_MODEL_ALLOWED_HOSTS allowlist.
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIConnectionInput'
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIConnection'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/connections/{id}:
+    patch:
+      operationId: UpdateAIConnection
+      tags:
+      - AI models
+      description: Partial fields merge with existing values; credentials prohibited here.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIConnectionPatch'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIConnection'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+    delete:
+      operationId: DeleteAIConnection
+      tags:
+      - AI models
+      description: ''
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/connections/{id}/credential:
+    put:
+      operationId: SetAIConnectionCredential
+      tags:
+      - AI models
+      description: Requires ai.connection.secret.write; empty value clears stored credential. Never returns
+        plaintext or ciphertext.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AICredentialInput'
+      responses:
+        '204':
+          description: Deleted
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/models:
+    get:
+      operationId: ListAIModels
+      tags:
+      - AI models
+      description: ''
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AIModel'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+    post:
+      operationId: CreateAIModel
+      tags:
+      - AI models
+      description: ''
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIModelInput'
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModel'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/models/{id}:
+    patch:
+      operationId: UpdateAIModel
+      tags:
+      - AI models
+      description: ''
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIModelPatch'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModel'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+    delete:
+      operationId: DeleteAIModel
+      tags:
+      - AI models
+      description: ''
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/test-sessions:
+    get:
+      operationId: ListAITestSessions
+      tags:
+      - AI models
+      description: Requires ai.model.test; only unexpired sessions owned by caller, including staff.
+      parameters:
+      - name: model_id
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AITestSession'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+    post:
+      operationId: CreateAITestSession
+      tags:
+      - AI models
+      description: Requires ai.model.test. Browser OCR is local-only and creates no server session.
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AITestSessionInput'
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AITestSession'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/test-sessions/{id}:
+    get:
+      operationId: GetAITestSession
+      tags:
+      - AI models
+      description: ''
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AITestSessionDetail'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+    delete:
+      operationId: DeleteAITestSession
+      tags:
+      - AI models
+      description: ''
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/test-sessions/{id}/attachments:
+    post:
+      operationId: UploadAITestAttachment
+      tags:
+      - AI models
+      description: One file per multipart request; 20 MiB/file; at most 4 attachments/message and 24 MiB
+        binary history. Owner-isolated, server_remote only.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AITestAttachment'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/test-sessions/{id}/attachments/{attachmentId}:
+    get:
+      operationId: GetAITestAttachment
+      tags:
+      - AI models
+      description: ''
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: attachmentId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+    delete:
+      operationId: DeleteAITestAttachment
+      tags:
+      - AI models
+      description: ''
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: attachmentId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/test-sessions/{id}/messages:
+    post:
+      operationId: SendAITestMessage
+      tags:
+      - AI models
+      description: Requires ai.model.test. request_id is idempotent; mismatched payload returns 409. One
+        active call/session. Poll invocation snapshots; no separate SSE endpoint.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AITestMessageInput'
+      responses:
+        '202':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIInvocationAccepted'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/invocations:
+    get:
+      operationId: ListAIInvocations
+      tags:
+      - AI models
+      description: Requires ai.model.log.read; own metadata only, no prompts or output; up to 200 recent
+        records.
+      parameters:
+      - name: model_id
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AIInvocationLog'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/invocations/{id}:
+    get:
+      operationId: GetAIInvocation
+      tags:
+      - AI models
+      description: Requires ai.model.test and caller ownership. Output snapshots do not imply completion.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIInvocation'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+  /api/v2/admin/ai-models/invocations/{id}/cancel:
+    post:
+      operationId: CancelAIInvocation
+      tags:
+      - AI models
+      description: Cancellation request does not guarantee upstream cancellation. Use cancellation_confirmed
+        and terminal status.
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIInvocation'
+        default:
+          description: Safe error; 400 invalid, 403 permission, 404 missing or other owner/expired, 409
+            in use/conflict, 429 quota, 503 unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIModelError'
+
+components:
+  parameters:
+    ApplicationId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ScheduleId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+
+  schemas:
+    AIConnectionInput:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - adapter
+      - base_url
+      - enabled
+      - timeout_seconds
+      - max_concurrency
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        adapter:
+          type: string
+          enum:
+          - openai_chat
+          - gemini
+        base_url:
+          type: string
+          maxLength: 2048
+        enabled:
+          type: boolean
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 600
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 64
+        credential:
+          type: string
+          maxLength: 8192
+          writeOnly: true
+    AIConnectionPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        adapter:
+          type: string
+          enum:
+          - openai_chat
+          - gemini
+        base_url:
+          type: string
+          maxLength: 2048
+        enabled:
+          type: boolean
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 600
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 64
+    AIConnection:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - name
+      - adapter
+      - base_url
+      - enabled
+      - timeout_seconds
+      - max_concurrency
+      - has_credential
+      - version
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        adapter:
+          type: string
+          enum:
+          - openai_chat
+          - gemini
+        base_url:
+          type: string
+          maxLength: 2048
+        enabled:
+          type: boolean
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 600
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 64
+        has_credential:
+          type: boolean
+        version:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AICredentialInput:
+      type: object
+      additionalProperties: false
+      required:
+      - credential
+      properties:
+        credential:
+          type: string
+          maxLength: 8192
+          writeOnly: true
+    AICapabilities:
+      type: object
+      additionalProperties: false
+      required:
+      - image
+      - video
+      - pdf
+      - streaming
+      properties:
+        image:
+          type: boolean
+        video:
+          type: boolean
+        pdf:
+          type: boolean
+        streaming:
+          type: boolean
+    AIParameters:
+      type: object
+      additionalProperties: false
+      required: []
+      properties:
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+        max_output_tokens:
+          type: integer
+          minimum: 1
+          maximum: 32768
+    AIBrowserManifest:
+      type: object
+      additionalProperties: false
+      required:
+      - adapter
+      - version
+      - resources
+      properties:
+        adapter:
+          type: string
+          enum:
+          - paddleocr_tiny
+        version:
+          type: string
+        resources:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - name
+            - url
+            - sha256
+            - size_bytes
+            properties:
+              name:
+                type: string
+              url:
+                type: string
+              sha256:
+                type: string
+                pattern: ^[a-fA-F0-9]{64}$
+              size_bytes:
+                type: integer
+                format: int64
+                minimum: 1
+                maximum: 67108864
+      description: Fixed trusted adapter; manifest JSON <= 1 MiB. Resource URLs cannot be scripts.
+    AIModelInput:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - capability_kind
+      - execution_location
+      - capabilities
+      - default_parameters
+      - enabled
+      properties:
+        name:
+          type: string
+          maxLength: 128
+        model_id:
+          type: string
+          maxLength: 255
+        capability_kind:
+          type: string
+          enum:
+          - chat
+          - ocr
+        execution_location:
+          type: string
+          enum:
+          - server_remote
+          - browser_local
+        connection_id:
+          type: string
+          nullable: true
+        browser_manifest:
+          $ref: '#/components/schemas/AIBrowserManifest'
+          nullable: true
+        capabilities:
+          $ref: '#/components/schemas/AICapabilities'
+        default_parameters:
+          $ref: '#/components/schemas/AIParameters'
+        enabled:
+          type: boolean
+    AIModelPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          maxLength: 128
+        model_id:
+          type: string
+          maxLength: 255
+        capability_kind:
+          type: string
+          enum:
+          - chat
+          - ocr
+        execution_location:
+          type: string
+          enum:
+          - server_remote
+          - browser_local
+        connection_id:
+          type: string
+          nullable: true
+        browser_manifest:
+          $ref: '#/components/schemas/AIBrowserManifest'
+          nullable: true
+        capabilities:
+          $ref: '#/components/schemas/AICapabilities'
+        default_parameters:
+          $ref: '#/components/schemas/AIParameters'
+        enabled:
+          type: boolean
+    AIModel:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - name
+      - model_id
+      - capability_kind
+      - execution_location
+      - capabilities
+      - default_parameters
+      - enabled
+      - validation_status
+      - version
+      - created_at
+      - updated_at
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          maxLength: 128
+        model_id:
+          type: string
+          maxLength: 255
+        capability_kind:
+          type: string
+          enum:
+          - chat
+          - ocr
+        execution_location:
+          type: string
+          enum:
+          - server_remote
+          - browser_local
+        connection_id:
+          type: string
+          nullable: true
+        browser_manifest:
+          $ref: '#/components/schemas/AIBrowserManifest'
+          nullable: true
+        capabilities:
+          $ref: '#/components/schemas/AICapabilities'
+        default_parameters:
+          $ref: '#/components/schemas/AIParameters'
+        enabled:
+          type: boolean
+        validation_status:
+          type: string
+          enum:
+          - unverified
+        version:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AITestSessionInput:
+      type: object
+      additionalProperties: false
+      required:
+      - model_id
+      properties:
+        model_id:
+          type: string
+        title:
+          type: string
+          maxLength: 255
+    AITestSession:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - model_id
+      - title
+      - created_at
+      - expires_at
+      properties:
+        id:
+          type: string
+        model_id:
+          type: string
+        title:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        active_invocation_id:
+          type: string
+          description: Current invocation for this owned session; omitted when no invocation is active.
+    AITestAttachment:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - name
+      - mime_type
+      - size_bytes
+      - kind
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        mime_type:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        kind:
+          type: string
+          enum:
+          - image
+          - video
+          - pdf
+        url:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    AITestMessage:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - role
+      - text
+      - attachments
+      - created_at
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum:
+          - system
+          - user
+          - assistant
+        text:
+          type: string
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/AITestAttachment'
+        created_at:
+          type: string
+          format: date-time
+    AITestSessionDetail:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - model_id
+      - title
+      - created_at
+      - expires_at
+      - messages
+      properties:
+        id:
+          type: string
+        model_id:
+          type: string
+        title:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        active_invocation_id:
+          type: string
+          description: Current invocation for this owned session; omitted when no invocation is active.
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/AITestMessage'
+    AITestMessageInput:
+      type: object
+      additionalProperties: false
+      required:
+      - request_id
+      properties:
+        text:
+          type: string
+          maxLength: 1048576
+        attachment_ids:
+          type: array
+          maxItems: 4
+          uniqueItems: true
+          items:
+            type: string
+        system_prompt:
+          type: string
+          maxLength: 65536
+        parameters:
+          $ref: '#/components/schemas/AIParameters'
+        request_id:
+          type: string
+          format: uuid
+    AIInvocationLog:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - session_id
+      - model_id
+      - status
+      - duration_ms
+      - created_at
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        model_id:
+          type: string
+        status:
+          type: string
+          enum:
+          - queued
+          - running
+          - succeeded
+          - failed
+          - cancelled
+          - indeterminate
+        error_code:
+          type: string
+        duration_ms:
+          type: integer
+          format: int64
+        input_tokens:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    AIInvocation:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - session_id
+      - model_id
+      - status
+      - duration_ms
+      - created_at
+      - output_text
+      - cancel_requested
+      - cancellation_confirmed
+      - model_version
+      - connection_version
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        model_id:
+          type: string
+        status:
+          type: string
+          enum:
+          - queued
+          - running
+          - succeeded
+          - failed
+          - cancelled
+          - indeterminate
+        error_code:
+          type: string
+        duration_ms:
+          type: integer
+          format: int64
+        input_tokens:
+          type: integer
+          format: int64
+        output_tokens:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        output_text:
+          type: string
+        error_message:
+          type: string
+        cancel_requested:
+          type: boolean
+        cancellation_confirmed:
+          type: boolean
+        model_version:
+          type: integer
+          format: int64
+        connection_version:
+          type: integer
+          format: int64
+    AIInvocationAccepted:
+      type: object
+      additionalProperties: false
+      required:
+      - invocation_id
+      properties:
+        invocation_id:
+          type: string
+    AIModelError:
+      type: object
+      additionalProperties: false
+      required:
+      - detail
+      properties:
+        detail:
+          type: string
+        code:
+          type: string
+
+
+    AdminPermission:
+      type: object
+      required: [id, code, category, name, description, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        category: { type: string }
+        name: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+    AdminRole:
+      type: object
+      required: [id, code, name, description, is_system, enabled, permissions, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        is_system: { type: boolean }
+        enabled: { type: boolean }
+        permissions: { type: array, items: { $ref: "#/components/schemas/AdminPermission" } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AdminRoleInput:
+      type: object
+      required: [name, description, enabled, permission_codes]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        enabled: { type: boolean }
+        permission_codes: { type: array, items: { type: string } }
+    AdminAssignment:
+      type: object
+      required: [id, role_id, role_code, role_name, enabled]
+      properties:
+        id: { type: integer, format: int64 }
+        role_id: { type: integer, format: int64 }
+        role_code: { type: string }
+        role_name: { type: string }
+        enabled: { type: boolean }
+        expires_at: { type: string, format: date-time, nullable: true }
+    Administrator:
+      type: object
+      required: [user_id, username, display_name, email, auth_source, is_staff, is_active, assignments]
+      properties:
+        user_id: { type: integer, format: int64 }
+        username: { type: string }
+        display_name: { type: string }
+        email: { type: string }
+        auth_source: { type: string }
+        is_staff: { type: boolean }
+        is_active: { type: boolean }
+        last_login_at: { type: string, format: date-time, nullable: true }
+        assignments: { type: array, items: { $ref: "#/components/schemas/AdminAssignment" } }
+    AdministratorInput:
+      type: object
+      required: [user_id, role_ids]
+      properties:
+        user_id: { type: integer, format: int64 }
+        role_ids: { type: array, items: { type: integer, format: int64 } }
+        expires_at: { type: string, format: date-time, nullable: true }
+    AdminMe:
+      type: object
+      required: [can_access_console, is_super_admin, roles, permissions]
+      properties:
+        can_access_console: { type: boolean }
+        is_super_admin: { type: boolean }
+        roles: { type: array, items: { $ref: "#/components/schemas/AdminRole" } }
+        permissions: { type: array, items: { $ref: "#/components/schemas/AdminPermission" } }
+    AccessGroupDepartmentInput:
+      type: object
+      required: [department_id, include_children]
+      properties:
+        department_id: { type: integer, format: int64 }
+        include_children: { type: boolean }
+    AccessGroupInput:
+      type: object
+      required: [name, description, enabled, department_grants, user_grants]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        enabled: { type: boolean }
+        department_grants: { type: array, items: { $ref: "#/components/schemas/AccessGroupDepartmentInput" } }
+        user_grants: { type: array, items: { type: integer, format: int64 } }
+    AccessGroup:
+      type: object
+      required: [id, code, name, description, source_type, external_group_id, external_group_type, enabled, sync_status, member_count, covered_users, application_count, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        source_type: { type: string, enum: [local, feishu] }
+        external_group_id: { type: string }
+        external_group_type: { type: string, enum: ["", normal, dynamic, unknown] }
+        enabled: { type: boolean }
+        sync_status: { type: string }
+        last_synced_at: { type: string, format: date-time, nullable: true }
+        member_count: { type: integer }
+        covered_users: { type: integer }
+        application_count: { type: integer }
+        departments: { type: array, items: { $ref: "#/components/schemas/ApplicationDepartmentGrant" } }
+        users: { type: array, items: { $ref: "#/components/schemas/AccessGroupUserGrant" } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AccessGroupUserGrant:
+      type: object
+      required: [directory_user_id, name, avatar_url]
+      properties:
+        directory_user_id: { type: integer, format: int64 }
+        name: { type: string }
+        avatar_url: { type: string }
+    AccessGroupMember:
+      type: object
+      required: [directory_user_id, name, avatar_url, external_user_id, departments, source]
+      properties:
+        directory_user_id: { type: integer, format: int64 }
+        name: { type: string }
+        avatar_url: { type: string }
+        external_user_id: { type: string }
+        departments: { type: array, items: { type: string } }
+        source: { type: string, enum: [local, feishu] }
+    AccessGroupApplication:
+      type: object
+      required: [id, name, kind, enabled]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        kind: { type: string }
+        enabled: { type: boolean }
+    AccessDiagnosisInput:
+      type: object
+      required: [directory_user_id, application_id]
+      properties:
+        directory_user_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+    AccessDecision:
+      type: object
+      required: [allowed, reason_code, matched_grants, access_path]
+      properties:
+        allowed: { type: boolean }
+        reason_code: { type: string }
+        application: { $ref: "#/components/schemas/AccessDecisionApplication" }
+        user: { $ref: "#/components/schemas/AccessDecisionUser" }
+        matched_grants: { type: array, items: { $ref: "#/components/schemas/AccessMatchedGrant" } }
+        access_path: { type: array, items: { type: string } }
+    AccessDecisionApplication:
+      type: object
+      required: [id, name, enabled, access_mode]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        enabled: { type: boolean }
+        access_mode: { type: string, enum: [all, assigned, admin_only] }
+    AccessDecisionUser:
+      type: object
+      required: [id, name, active, resigned, linked]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        active: { type: boolean }
+        resigned: { type: boolean }
+        linked: { type: boolean }
+        local_user_id: { type: integer, format: int64, nullable: true }
+    AccessMatchedGrant:
+      type: object
+      required: [type, id, name]
+      properties:
+        type: { type: string }
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        source_type: { type: string }
+        external_group_type: { type: string }
+        include_children: { type: boolean }
+    DirectoryDepartment:
+      type: object
+      required: [id, open_department_id, name, parent_open_department_id, order_weight, is_active]
+      properties:
+        id: { type: integer, format: int64 }
+        open_department_id: { type: string }
+        name: { type: string }
+        parent_id: { type: integer, format: int64, nullable: true }
+        parent_open_department_id: { type: string }
+        order_weight: { type: string }
+        is_active: { type: boolean }
+        last_synced_at: { type: string, format: date-time, nullable: true }
+    DirectoryDepartmentPage:
+      type: object
+      required: [results]
+      properties:
+        results: { type: array, items: { $ref: "#/components/schemas/DirectoryDepartment" } }
+        next_cursor: { type: string, nullable: true }
+    DirectoryDepartmentRef:
+      type: object
+      required: [id, name, is_primary]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        is_primary: { type: boolean }
+    DirectoryUser:
+      type: object
+      required: [id, open_id, name, avatar_url, active_status, is_resigned, is_active, departments]
+      properties:
+        id: { type: integer, format: int64 }
+        open_id: { type: string }
+        name: { type: string }
+        avatar_url: { type: string }
+        active_status: { type: integer }
+        is_resigned: { type: boolean }
+        local_user_id: { type: integer, format: int64, nullable: true }
+        is_active: { type: boolean }
+        departments: { type: array, items: { $ref: "#/components/schemas/DirectoryDepartmentRef" } }
+        last_synced_at: { type: string, format: date-time, nullable: true }
+    DirectoryUserPage:
+      type: object
+      required: [results]
+      properties:
+        results: { type: array, items: { $ref: "#/components/schemas/DirectoryUser" } }
+        next_cursor: { type: string, nullable: true }
+    DirectoryStats:
+      type: object
+      required: [departments_total, departments_active, users_total, users_active, users_resigned, oauth_users, linked_directory_users]
+      properties:
+        departments_total: { type: integer, format: int64 }
+        departments_active: { type: integer, format: int64 }
+        users_total: { type: integer, format: int64 }
+        users_active: { type: integer, format: int64 }
+        users_resigned: { type: integer, format: int64 }
+        oauth_users: { type: integer, format: int64 }
+        linked_directory_users: { type: integer, format: int64 }
+    DirectorySyncConfig:
+      type: object
+      required: [enabled, schedule_type, interval_minutes, daily_time, timezone, updated_at]
+      properties:
+        enabled: { type: boolean }
+        schedule_type: { type: string, enum: [interval, daily] }
+        interval_minutes: { type: integer }
+        daily_time: { type: string }
+        timezone: { type: string }
+        next_run_at: { type: string, format: date-time, nullable: true }
+        last_run_at: { type: string, format: date-time, nullable: true }
+        last_success_at: { type: string, format: date-time, nullable: true }
+        directory_version: { type: integer, format: int64 }
+        updated_at: { type: string, format: date-time }
+    DirectorySyncConfigUpdate:
+      type: object
+      required: [enabled, schedule_type, interval_minutes, daily_time, timezone]
+      properties:
+        enabled: { type: boolean }
+        schedule_type: { type: string, enum: [interval, daily] }
+        interval_minutes: { type: integer, minimum: 15, maximum: 10080 }
+        daily_time: { type: string, pattern: "^[0-2][0-9]:[0-5][0-9]$" }
+        timezone: { type: string }
+    DirectorySyncRun:
+      type: object
+      required: [id, trigger_type, status, departments_count, users_count, active_users_count, memberships_count, active_memberships_count, groups_count, group_members_count, group_fetch_warnings, member_mapping_errors, unknown_users_count, error_code, error_message, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        trigger_type: { type: string, enum: [manual, scheduled] }
+        status: { type: string, enum: [pending, running, success, failed] }
+        departments_count: { type: integer }
+        users_count: { type: integer }
+        active_users_count: { type: integer }
+        memberships_count: { type: integer }
+        active_memberships_count: { type: integer }
+        groups_count: { type: integer }
+        group_members_count: { type: integer }
+        group_fetch_warnings: { type: integer }
+        member_mapping_errors: { type: integer }
+        unknown_users_count: { type: integer }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        error_code: { type: string }
+        error_message: { type: string }
+        created_by: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+    ApplicationDepartmentGrant:
+      type: object
+      required: [department_id, name, include_children, covered_users]
+      properties:
+        department_id: { type: integer, format: int64 }
+        name: { type: string }
+        include_children: { type: boolean }
+        covered_users: { type: integer }
+    ApplicationUserGrant:
+      type: object
+      required: [directory_user_id, name, avatar_url, departments]
+      properties:
+        directory_user_id: { type: integer, format: int64 }
+        name: { type: string }
+        avatar_url: { type: string }
+        departments: { type: array, items: { type: string } }
+    ApplicationAccessPolicy:
+      type: object
+      required: [application_id, access_mode, departments, users, groups]
+      properties:
+        application_id: { type: integer, format: int64 }
+        access_mode: { type: string, enum: [all, assigned, admin_only] }
+        departments: { type: array, items: { $ref: "#/components/schemas/ApplicationDepartmentGrant" } }
+        users: { type: array, items: { $ref: "#/components/schemas/ApplicationUserGrant" } }
+        groups: { type: array, items: { $ref: "#/components/schemas/ApplicationGroupGrant" } }
+    ApplicationGroupGrant:
+      type: object
+      required: [group_id, name, source_type, external_group_type, member_count, enabled]
+      properties:
+        group_id: { type: integer, format: int64 }
+        name: { type: string }
+        source_type: { type: string, enum: [local, feishu] }
+        external_group_type: { type: string }
+        member_count: { type: integer }
+        enabled: { type: boolean }
+    ApplicationDepartmentGrantInput:
+      type: object
+      required: [department_id, include_children]
+      properties:
+        department_id: { type: integer, format: int64 }
+        include_children: { type: boolean, default: true }
+    ApplicationAccessUpdate:
+      type: object
+      required: [access_mode, department_grants, user_grants, group_grants]
+      properties:
+        access_mode: { type: string, enum: [all, assigned, admin_only] }
+        department_grants: { type: array, items: { $ref: "#/components/schemas/ApplicationDepartmentGrantInput" } }
+        user_grants: { type: array, items: { type: integer, format: int64 } }
+        group_grants: { type: array, items: { type: integer, format: int64 } }
+    AuditLog:
+      type: object
+      required: [id, action, resource_type, resource_id, detail, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        user_id: { type: integer, format: int64, nullable: true }
+        action: { type: string }
+        resource_type: { type: string }
+        resource_id: { type: string }
+        detail: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+    ConversationSummary:
+      type: object
+      required: [id, title, updated_at]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        application_id:
+          nullable: true
+          type: integer
+        message_count: { type: integer }
+        updated_at: { type: string, format: date-time }
+        last_message:
+          nullable: true
+          type: object
+          properties:
+            role: { type: string }
+            content: { type: string }
+            created_at: { type: string, format: date-time }
+
+    ConversationDetail:
+      type: object
+      required: [id, title, messages]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        application_id:
+          nullable: true
+          type: integer
+        messages:
+          type: array
+          items:
+            type: object
+            required: [id, role, content, created_at]
+            properties:
+              id: { type: integer }
+              role: { type: string, enum: [user, assistant, system] }
+              content: { type: string }
+              created_at: { type: string, format: date-time }
+              metadata:
+                nullable: true
+                type: object
+                additionalProperties: true
+
+    ConversationShare:
+      type: object
+      required: [share_token, message_count, created_at]
+      properties:
+        share_token: { type: string }
+        message_count: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    FeishuForwardTarget:
+      type: object
+      required: [id, name, target_type]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        avatar_url: { type: string }
+        target_type: { type: string, enum: [user, chat] }
+
+    FeishuForwardTargetPage:
+      type: object
+      required: [items, next_cursor, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/FeishuForwardTarget" }
+        next_cursor:
+          type: string
+          description: |
+            Continuation token — pass back as ?cursor to fetch the next
+            page (type=user only). Empty when has_more is false.
+        has_more:
+          type: boolean
+          description: Whether another page exists (always false for chats).
+
+    FeishuForwardResult:
+      type: object
+      required: [results, success_count, fail_count]
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            required: [target_id, ok]
+            properties:
+              target_id: { type: string }
+              ok: { type: boolean }
+              error: { type: string }
+        success_count: { type: integer }
+        fail_count: { type: integer }
+
+    PublicShareDetail:
+      type: object
+      required: [title, shared_at, messages]
+      properties:
+        title: { type: string }
+        shared_at: { type: string, format: date-time }
+        messages:
+          type: array
+          items:
+            type: object
+            required: [role, content, created_at]
+            properties:
+              role: { type: string, enum: [user, assistant, system] }
+              content: { type: string }
+              created_at: { type: string, format: date-time }
+              artifacts:
+                type: array
+                description: Artifact references (metadata only) for resolving inline files.
+                items:
+                  type: object
+                  required: [artifact_id, name]
+                  properties:
+                    artifact_id: { type: string }
+                    name: { type: string }
+
+    DetailError:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string }
+    SimpleError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    BareError:
+      type: array
+      items: { type: string }
+    FieldErrors:
+      type: object
+      description: map of field name -> list of messages
+      additionalProperties:
+        type: array
+        items: { type: string }
+
+    Tokens:
+      type: object
+      properties:
+        access: { type: string }
+        refresh: { type: string }
+
+    User:
+      type: object
+      description: session_user_payload — the single canonical user shape
+      required: [id, username]
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        email: { type: string }
+        role: { type: string }
+        avatar: { type: string }
+        avatar_url: { type: string }
+        auth_source: { type: string }
+        is_staff: { type: boolean }
+        display_name: { type: string }
+        display_id: { type: string }
+
+    SessionUser:
+      type: object
+      required: [username]
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        display_name: { type: string }
+        display_id: { type: string }
+        avatar_url: { type: string }
+        auth_source: { type: string }
+        is_staff: { type: boolean }
+
+    ApplicationListItem:
+      type: object
+      description: shape returned by GET /api/v2/applications
+      required:
+        - id
+        - slug
+        - name
+        - description
+        - icon
+        - avatar_url
+        - color
+        - kind
+        - renderer_key
+        - executor_key
+        - category_slug
+        - category_name
+        - is_public
+        - enabled
+        - runtime_type
+        - provider_key
+        - external_resource_id
+        - identity_mode
+        - execution_mode
+        - capabilities
+        - is_bound
+        - is_consumable
+        - is_favorite
+        - is_default_agent
+        - can_manage
+        - usage_count
+        - last_used_at
+        - global_usage_count
+        - skills
+      properties:
+        id: { type: integer }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: string }
+        icon: { type: string }
+        avatar_url: { type: string }
+        color: { type: string }
+        kind: { type: string, enum: [chat, task, custom] }
+        renderer_key: { type: string }
+        executor_key: { type: string }
+        category_slug: { type: string }
+        category_name: { type: string }
+        is_public: { type: boolean }
+        enabled: { type: boolean }
+        runtime_type: { type: string }
+        provider_key: { type: string }
+        external_resource_id: { type: string }
+        identity_mode: { type: string }
+        execution_mode: { type: string }
+        capabilities:
+          type: object
+          additionalProperties: { type: boolean }
+        is_bound: { type: boolean }
+        is_consumable: { type: boolean }
+        consume_block_reason:
+          type: string
+          enum: [disabled, unbound, runtime_unavailable]
+        is_favorite: { type: boolean }
+        is_default_agent: { type: boolean }
+        can_manage: { type: boolean }
+        usage_count: { type: integer }
+        last_used_at:
+          type: string
+          nullable: true
+          format: date-time
+        global_usage_count: { type: integer }
+        skills:
+          type: array
+          description: >-
+            Agent-scoped 技能配置. Always present; `[]` when the agent has none.
+          items: { $ref: "#/components/schemas/ApplicationSkill" }
+
+    ApplicationPage:
+      type: object
+      description: >
+        One keyset page of the catalog (GET /api/v2/applications/page). Items
+        carry the same shape as the legacy bare-array endpoint. next_cursor is
+        opaque and empty when has_more is false.
+      required: [items, next_cursor, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ApplicationListItem" }
+        next_cursor: { type: string }
+        has_more: { type: boolean }
+
+    ApplicationSummary:
+      type: object
+      description: >
+        Display projection of one application (执行报告 §11, P2-1): what a card,
+        a switcher row, a shortcut or a bottom-sheet row needs to render, and
+        nothing else. Deliberately excludes `skills`, `external_resource_id`,
+        `identity_mode`, `execution_mode`, `capabilities` and `can_manage` —
+        a consumer that needs those resolves the single application it is bound
+        to through /applications/resolve or /applications/{id}.
+      required:
+        - id
+        - slug
+        - name
+        - description
+        - icon
+        - avatar_url
+        - color
+        - kind
+        - renderer_key
+        - category_slug
+        - category_name
+        - provider_key
+        - runtime_type
+        - enabled
+        - is_bound
+        - is_consumable
+        - is_favorite
+        - is_default_agent
+        - usage_count
+        - last_used_at
+        - global_usage_count
+      properties:
+        id: { type: integer }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: string }
+        icon: { type: string }
+        avatar_url: { type: string }
+        color: { type: string }
+        kind: { type: string, enum: [chat, task, custom] }
+        renderer_key: { type: string }
+        category_slug: { type: string }
+        category_name: { type: string }
+        provider_key: { type: string }
+        runtime_type: { type: string }
+        enabled: { type: boolean }
+        is_bound: { type: boolean }
+        is_consumable: { type: boolean }
+        consume_block_reason:
+          type: string
+          enum: [disabled, unbound, runtime_unavailable]
+        is_favorite: { type: boolean }
+        is_default_agent: { type: boolean }
+        usage_count: { type: integer, description: this caller's own runs }
+        last_used_at:
+          type: string
+          nullable: true
+          format: date-time
+        global_usage_count: { type: integer }
+        skills:
+          type: array
+          description: >
+            Only present on `default_application` in WorkspaceBootstrap (the
+            home composer renders this agent's 技能 chips).
+          items: { $ref: "#/components/schemas/ApplicationSkill" }
+        capabilities:
+          type: object
+          additionalProperties: { type: boolean }
+          description: only present on `default_application` (same reason)
+
+    ApplicationCategory:
+      type: object
+      description: >
+        One category rail entry. `slug` is what `category_slug` accepts on the
+        paged endpoint; the sentinel `__uncategorized__` is the 其他 tab
+        (rows with no category) and is only emitted when such rows exist.
+      required: [slug, name, count]
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        count:
+          type: integer
+          description: visible applications in this category (both kinds' rails are separate)
+
+    WorkspaceBootstrap:
+      type: object
+      description: >
+        Start-up catalog facts (GET /api/v2/workspace/bootstrap). Constant size
+        by design — the shell renders home shortcuts, the category rails, the
+        default agent and the mobile pickers from this payload and NEVER needs
+        the whole catalog.
+      required:
+        - default_application
+        - favorites
+        - frequent
+        - recent
+        - recommended
+        - recent_fixed_apps
+        - agent_categories
+        - app_categories
+        - recent_capabilities
+        - recent_tasks
+      properties:
+        default_application:
+          description: >
+            The workspace's main agent (explicit `is_default_agent`, else the
+            first bound chat application). null when the caller can see no
+            bound chat application at all.
+          nullable: true
+          allOf: [{ $ref: "#/components/schemas/ApplicationSummary" }]
+        favorites:
+          type: array
+          description: 收藏 (chat applications this caller starred)
+          items: { $ref: "#/components/schemas/ApplicationSummary" }
+        frequent:
+          type: array
+          description: 常用智能体 (most-run by this caller)
+          items: { $ref: "#/components/schemas/ApplicationSummary" }
+        recent:
+          type: array
+          description: 最近使用 (chat, most recently run by this caller)
+          items: { $ref: "#/components/schemas/ApplicationSummary" }
+        recommended:
+          type: array
+          description: 推荐 (chat, not yet used by this caller, most used globally)
+          items: { $ref: "#/components/schemas/ApplicationSummary" }
+        recent_fixed_apps:
+          type: array
+          description: 常用应用 (non-chat applications this caller recently opened)
+          items: { $ref: "#/components/schemas/ApplicationSummary" }
+        agent_categories:
+          type: array
+          description: category rail for the 智能体 selectors (chat applications)
+          items: { $ref: "#/components/schemas/ApplicationCategory" }
+        app_categories:
+          type: array
+          description: category rail for 应用中心 / the 应用 selectors (non-chat)
+          items: { $ref: "#/components/schemas/ApplicationCategory" }
+        recent_capabilities:
+          type: array
+          description: Mixed recently used agents and applications, capped at eight.
+          items: { $ref: "#/components/schemas/ApplicationSummary" }
+        recent_tasks:
+          type: array
+          description: Eight most recently updated tasks; no messages/runs/artifacts arrays.
+          items: { $ref: "#/components/schemas/TaskSummary" }
+
+    TaskSummary:
+      type: object
+      required: [id, title, created_at, updated_at, execution_state]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        application_id: { type: integer, format: int64, nullable: true }
+        application_slug: { type: string }
+        application_name: { type: string }
+        application_icon: { type: string }
+        application_color: { type: string }
+        application_kind: { type: string }
+        preview: { type: string }
+        preview_role: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        execution_state: { type: string, enum: [idle, running, error] }
+
+    TaskPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/TaskSummary" }
+        next_cursor:
+          type: string
+          description: Opaque keyset cursor; empty when no next page exists.
+
+    TaskUpdateRequest:
+      type: object
+      required: [title]
+      additionalProperties: false
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+
+    MentionCandidate:
+      type: object
+      description: >
+        One `@` candidate for the composer's routing decision. `kind` matters:
+        a chat application receives the instruction, anything else is opened.
+      required: [id, slug, name, kind]
+      properties:
+        id: { type: integer }
+        slug: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [chat, task, custom] }
+
+    ApplicationSkill:
+      type: object
+      description: >-
+        An agent-scoped skill: a NAMED prompt fragment the composer prepends to
+        the user's message. It is not a provider capability — the provider only
+        ever sees ordinary message content, and interpreting the fragment is the
+        custom agent's own concern. Because the fragment changes `content`, the
+        existing idempotency request hash already covers it.
+      required: [id, name, prompt]
+      properties:
+        id:
+          type: string
+          maxLength: 64
+          pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          description: >-
+            Stable across renames so a saved composer selection survives an
+            admin rewording the skill. Derived from `name` when omitted.
+        name: { type: string, maxLength: 24, description: composer chip label }
+        description: { type: string, maxLength: 60, description: one-line subtitle }
+        prompt:
+          type: string
+          maxLength: 200
+          description: prepended verbatim to the user's message
+
+    ApplicationDetail:
+      type: object
+      description: compact shape returned by authoring / avatar / default-agent endpoints
+      required:
+        - id
+        - slug
+        - name
+        - description
+        - icon
+        - avatar_url
+        - color
+        - kind
+        - is_public
+        - enabled
+        - category_slug
+        - category_name
+        - is_default_agent
+        - is_bound
+        - is_consumable
+        - runtime_type
+        - provider_key
+        - external_resource_id
+        - identity_mode
+        - execution_mode
+        - can_manage
+        - updated_at
+      properties:
+        id: { type: integer }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: string }
+        icon: { type: string }
+        avatar_url: { type: string }
+        color: { type: string }
+        kind: { type: string, enum: [chat, task, custom] }
+        is_public: { type: boolean }
+        enabled: { type: boolean }
+        category_slug: { type: string }
+        category_name: { type: string }
+        is_default_agent: { type: boolean }
+        is_bound: { type: boolean }
+        is_consumable: { type: boolean }
+        consume_block_reason:
+          type: string
+          enum: [disabled, unbound, runtime_unavailable]
+        runtime_type: { type: string }
+        provider_key: { type: string }
+        external_resource_id: { type: string }
+        identity_mode: { type: string }
+        execution_mode: { type: string }
+        can_manage: { type: boolean }
+        updated_at: { type: string, format: date-time }
+        skills:
+          type: array
+          description: Agent-scoped 技能配置; always present, `[]` when none.
+          items: { $ref: "#/components/schemas/ApplicationSkill" }
+
+    RuntimeBindingInput:
+      type: object
+      required: [provider_key]
+      properties:
+        provider_key: { type: string, maxLength: 64 }
+        runtime_type:
+          type: string
+          enum: [agent, workflow, http, local_task, media, none]
+          default: agent
+        external_resource_id: { type: string, maxLength: 255 }
+        identity_mode: { type: string, enum: [user, tenant], default: user }
+        execution_mode: { type: string, enum: [interactive, background], default: interactive }
+        session_policy: { type: string, enum: [lazy, eager], default: lazy }
+        artifact_policy:
+          type: string
+          enum: [external_refresh, mirror_on_access, mirror_on_complete]
+          default: external_refresh
+        timeout_seconds: { type: integer, minimum: 10, maximum: 3600, default: 300 }
+        config:
+          type: object
+          additionalProperties: true
+
+    ApplicationCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 100, minLength: 1 }
+        slug:
+          type: string
+          maxLength: 100
+          pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        description: { type: string }
+        icon: { type: string, maxLength: 50 }
+        color: { type: string, maxLength: 20 }
+        category_slug: { type: string, maxLength: 100 }
+        category_name: { type: string, maxLength: 100 }
+        is_public: { type: boolean, default: false }
+        kind: { type: string, enum: [chat, page, form, dashboard, custom, task], default: chat }
+        renderer_key: { type: string, default: chat }
+        runtime: { $ref: "#/components/schemas/RuntimeBindingInput" }
+        set_default_agent: { type: boolean, default: false }
+        skills:
+          type: array
+          maxItems: 20
+          description: Agent-scoped 技能配置; omit or send `[]` for none.
+          items: { $ref: "#/components/schemas/ApplicationSkill" }
+
+    ApplicationUpdateRequest:
+      type: object
+      properties:
+        name: { type: string, maxLength: 100 }
+        description: { type: string }
+        icon: { type: string }
+        color: { type: string }
+        is_public: { type: boolean }
+        enabled: { type: boolean }
+        category_slug: { type: string }
+        category_name: { type: string }
+        runtime: { $ref: "#/components/schemas/RuntimeBindingInput" }
+        set_default_agent: { type: boolean }
+        skills:
+          type: array
+          maxItems: 20
+          description: >-
+            Replaces the stored 技能配置. OMIT the field to leave it untouched —
+            a rename must not clear an agent's skills; send `[]` to clear them.
+          items: { $ref: "#/components/schemas/ApplicationSkill" }
+
+    FavoriteResult:
+      type: object
+      required: [application_id, is_favorite]
+      properties:
+        application_id: { type: integer }
+        is_favorite: { type: boolean }
+
+    RuntimeDescriptor:
+      type: object
+      required:
+        - key
+        - provider_key
+        - provider_name
+        - runtime_type
+        - label
+        - resource_id_label
+        - resource_id_hint
+        - resource_id_pattern
+        - resource_id_required
+        - identity_modes
+        - execution_modes
+        - capabilities
+      properties:
+        key: { type: string, description: "provider_key:runtime_type" }
+        provider_key: { type: string }
+        provider_name: { type: string }
+        runtime_type: { type: string }
+        label: { type: string }
+        resource_id_label: { type: string }
+        resource_id_hint: { type: string }
+        resource_id_pattern: { type: string }
+        resource_id_required: { type: boolean }
+        identity_modes:
+          type: array
+          items: { type: string }
+        execution_modes:
+          type: array
+          items: { type: string }
+        capabilities:
+          type: object
+          additionalProperties: { type: boolean }
+
+    RuntimeValidationResult:
+      type: object
+      required: [ok, checked, detail]
+      properties:
+        ok: { type: boolean }
+        checked: { type: boolean }
+        detail: { type: string }
+
+    CreateRunRequest:
+      type: object
+      required: [application_id, content]
+      properties:
+        application_id: { type: integer }
+        content: { type: string, description: plain text user message }
+        conversation_id: { type: integer }
+        attachment_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: studio attachment ids uploaded by this user, unbound to a run
+        client_request_id:
+          type: string
+          maxLength: 64
+          description: >-
+            Client-generated idempotency token for ONE user send action (e.g.
+            a UUID). It must be stable across transport retries of that action
+            and must change when the user edits the message and sends again.
+            Reusing it with a different payload is a 409.
+
+    Run:
+      type: object
+      required:
+        - id
+        - organization
+        - user
+        - application
+        - conversation
+        - runtime_binding
+        - provider
+        - runtime_type
+        - external_run_id
+        - status
+        - provider_status
+        - provider_finish_reason
+        - input
+        - output
+        - attempt
+        - max_attempts
+        - queued_at
+        - started_at
+        - finished_at
+        - error_code
+        - error_message
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string, format: uuid }
+        organization:
+          type: integer
+          nullable: true
+        user:
+          type: integer
+          nullable: true
+        application: { type: integer }
+        conversation: { type: integer }
+        runtime_binding: { type: integer }
+        provider: { type: string }
+        runtime_type: { type: string }
+        external_run_id: { type: string, description: Aily agent_chat_id }
+        status:
+          type: string
+          enum: [queued, running, waiting_input, waiting_external, cancelling, cancelled, succeeded, failed, interrupted]
+        provider_status: { type: string }
+        provider_finish_reason: { type: string }
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        attempt: { type: integer }
+        max_attempts: { type: integer }
+        queued_at: { type: string, format: date-time }
+        started_at:
+          type: string
+          nullable: true
+          format: date-time
+        finished_at:
+          type: string
+          nullable: true
+          format: date-time
+        error_code: { type: string }
+        error_message: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    RunEvent:
+      type: object
+      # `run_id` (not `run`): this is the SAME record the SSE stream emits,
+      # so one reducer can consume both without a rename (第九轮复审 P2).
+      required: [id, run_id, sequence, event_type, payload, created_at]
+      properties:
+        id: { type: integer }
+        run_id: { type: string, format: uuid }
+        sequence: { type: integer }
+        event_type:
+          type: string
+          enum:
+            - run.started
+            - content.started
+            - content.delta
+            - content.completed
+            - content.snapshot
+            - tool.started
+            - tool.completed
+            - artifact.discovered
+            - artifact.created
+            - input.required
+            - run.completed
+            - run.failed
+            # Legacy historical compatibility only (pre-closure replays);
+            # the live protocol terminates with run.completed/failed/cancelled.
+            - run.interrupted
+            - run.cancelled
+            - run.poll
+            - run.retrying
+            - run.waiting_external
+        payload:
+          type: object
+          additionalProperties: true
+        created_at: { type: string, format: date-time }
+
+    RunEventPage:
+      type: object
+      required: [items, next_after, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/RunEvent" }
+        next_after:
+          type: integer
+          description: Highest sequence in this page; feed back as `after` to continue.
+        has_more:
+          type: boolean
+          description: >-
+            True when the page was full, so more events may follow. Derived
+            from the page size rather than a COUNT, so reading a page never
+            costs the whole history.
+
+    RunCommand:
+      type: object
+      required: [id, run, command_type, payload, status, created_by, created_at, resolved_at]
+      properties:
+        id: { type: string, format: uuid }
+        run: { type: string, format: uuid }
+        command_type: { type: string, enum: [cancel, respond, resume] }
+        payload:
+          type: object
+          additionalProperties: true
+        status: { type: string, enum: [pending, accepted, rejected] }
+        created_by:
+          type: integer
+          nullable: true
+        created_at: { type: string, format: date-time }
+        resolved_at:
+          type: string
+          nullable: true
+          format: date-time
+
+    CreateRunCommandRequest:
+      type: object
+      required: [command_type]
+      properties:
+        command_type: { type: string, enum: [cancel, respond, resume] }
+        payload:
+          type: object
+          additionalProperties: true
+
+    RuntimeAttachment:
+      type: object
+      required: [id, run, conversation, provider, external_attachment_id, attachment_type, name, source_type, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        run:
+          type: string
+          nullable: true
+          format: uuid
+        conversation:
+          type: integer
+          nullable: true
+        provider: { type: string }
+        external_attachment_id: { type: string, description: Aily agent_attachment_id }
+        attachment_type: { type: string, enum: [image, file, feishu_doc, bitable] }
+        name: { type: string }
+        source_type: { type: string, enum: [upload, doc_url] }
+        status: { type: string, enum: [pending, uploaded, failed] }
+        created_at: { type: string, format: date-time }
+
+    RunArtifact:
+      type: object
+      required:
+        - id
+        - run
+        - provider
+        - external_artifact_id
+        - provider_artifact_type
+        - name
+        - normalized_type
+        - storage_type
+        - cached_url_expires_at
+        - resolution_status
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string, format: uuid }
+        run: { type: string, format: uuid }
+        provider: { type: string }
+        external_artifact_id: { type: string, description: Aily agent_artifact_id — the long-term reference }
+        provider_artifact_type: { type: string }
+        name: { type: string }
+        normalized_type: { type: string, default: file }
+        storage_type: { type: string, enum: [external, mirrored] }
+        cached_url_expires_at:
+          type: string
+          nullable: true
+          format: date-time
+        resolution_status: { type: string, enum: [pending, resolved, expired, failed, mirrored] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    # ─────────────────────────────────────────────────────── schedules ──
+    ScheduleUpsertRequest:
+      type: object
+      description: Structured trigger only — the UI never submits raw cron.
+      required:
+        - name
+        - application_id
+        - prompt
+        - schedule_type
+      properties:
+        name: { type: string, maxLength: 200 }
+        description: { type: string }
+        application_id: { type: integer }
+        prompt: { type: string, description: User message sent on every run }
+        schedule_type: { type: string, enum: [once, daily, weekly, monthly] }
+        timezone: { type: string, default: Asia/Shanghai, description: IANA name }
+        run_at: { type: string, format: date-time, description: Required for schedule_type=once }
+        trigger:
+          type: object
+          properties:
+            starts_at: { type: string, format: date-time, description: Inclusive absolute start instant; absent means immediate }
+            ends_at: { type: string, format: date-time, description: Inclusive absolute end instant; absent means unbounded }
+            time: { type: string, description: "HH:MM in the schedule timezone" }
+            days_of_week:
+              type: array
+              items: { type: integer, minimum: 0, maximum: 6 }
+              description: 0=Sunday … 6=Saturday (weekly)
+            day_of_month: { type: integer, minimum: 1, maximum: 31, description: Short months clamp to the last day (monthly) }
+        conversation_policy: { type: string, enum: [new_each_run, reuse], default: new_each_run }
+        overlap_policy: { type: string, enum: [skip, queue], default: queue }
+        misfire_policy: { type: string, enum: [fire_once, skip], default: fire_once }
+        deadline_policy: { type: string, enum: [skip, execute_anyway], default: execute_anyway }
+        execution_window_seconds: { type: integer, default: 0, maximum: 86400 }
+        deliveries:
+          type: array
+          maxItems: 20
+          description: Feishu targets; omitted/empty means no delivery
+          items:
+            type: object
+            required: [target_type, target_id]
+            properties:
+              target_type: { type: string, enum: [user, chat] }
+              target_id: { type: string }
+              target_name: { type: string, description: Display snapshot captured at save time }
+              content_mode: { type: string, enum: [summary], default: summary }
+              condition: { $ref: "#/components/schemas/ScheduleDeliveryCondition" }
+
+    ScheduleDeliveryCondition:
+      type: object
+      description: Case-sensitive literal substring test against final assistant output.text only. Missing condition means always; non-always text must not be blank.
+      required: [operator]
+      properties:
+        operator: { type: string, enum: [always, contains, not_contains], default: always }
+        text: { type: string }
+
+    Schedule:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string }
+        application_id: { type: integer }
+        prompt: { type: string }
+        schedule_type: { type: string, enum: [once, daily, weekly, monthly] }
+        cron_expression: { type: string, description: Informational — derived from the trigger }
+        timezone: { type: string }
+        run_at: { type: string, format: date-time, nullable: true }
+        trigger:
+          type: object
+          properties:
+            starts_at: { type: string, format: date-time, description: Inclusive absolute start instant; absent means immediate }
+            ends_at: { type: string, format: date-time, description: Inclusive absolute end instant; absent means unbounded }
+            time: { type: string }
+            days_of_week: { type: array, items: { type: integer } }
+            day_of_month: { type: integer }
+        enabled: { type: boolean }
+        conversation_policy: { type: string }
+        overlap_policy: { type: string }
+        misfire_policy: { type: string }
+        deadline_policy: { type: string }
+        execution_window_seconds: { type: integer }
+        next_run_at: { type: string, format: date-time, nullable: true }
+        last_run_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        deliveries:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              target_type: { type: string, enum: [user, chat] }
+              target_id: { type: string }
+              target_name: { type: string }
+              content_mode: { type: string }
+              enabled: { type: boolean }
+              condition: { $ref: "#/components/schemas/ScheduleDeliveryCondition" }
+        last_occurrence: { $ref: "#/components/schemas/ScheduleOccurrence" }
+
+    ScheduleOccurrence:
+      type: object
+      description: One scheduled time slot of a schedule and its run linkage.
+      properties:
+        id: { type: integer }
+        schedule_id: { type: integer }
+        scheduled_at: { type: string, format: date-time }
+        enqueued_at: { type: string, format: date-time, nullable: true }
+        admitted_at: { type: string, format: date-time, nullable: true }
+        run_id: { type: string, format: uuid, description: Empty when the occurrence never reached a run }
+        status: { type: string, enum: [pending, queued, running, succeeded, failed, skipped] }
+        triggered_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }

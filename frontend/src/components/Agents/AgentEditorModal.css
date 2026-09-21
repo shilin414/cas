@@ -1,0 +1,124 @@
+/* Load agent-authoring styles with the editor used by Enterprise Management. */
+.agent-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.agent-form-row-compact {
+  grid-template-columns: 2fr 1fr;
+}
+
+.agent-system-prompt-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.agent-skills-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-skills-editor__row {
+  display: grid;
+  grid-template-columns: 1.1fr 1.4fr 1fr auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.agent-skills-editor__row > .ant-form-item {
+  margin-bottom: 0;
+}
+
+.agent-editor-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-sec);
+}
+
+.agent-avatar-form {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.agent-avatar-form__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.agent-avatar-form__actions span {
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.agent-avatar-editor {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 4px;
+}
+
+.agent-avatar-editor__preview {
+  background: var(--color-bg-elevated);
+  font-size: 40px;
+  border: 1px solid var(--color-border);
+}
+
+.agent-avatar-editor__hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--color-text);
+  text-align: center;
+}
+
+.agent-avatar-editor__hint span {
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.agent-avatar-editor__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.agent-avatar-editor__file {
+  font-size: 12px;
+  color: var(--color-text-dim);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .agent-form-row,
+  .agent-form-row-compact {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .agent-skills-editor__row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .agent-skills-editor__row > .ant-form-item {
+    grid-column: 1;
+  }
+
+  .agent-avatar-form {
+    align-items: flex-start;
+  }
+}

@@ -1,0 +1,126 @@
+# -----------------------------------------------------------------------------
+# Secrets and machine-local configuration
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.env
+*.env.*
+!*.env.example
+!*.env.*.example
+
+# Package-manager and CLI credentials
+.npmrc
+.pypirc
+.netrc
+.authinfo
+.authinfo.gpg
+
+# Credentials, tokens, certificates, and private keys
+credentials.json
+credentials*.json
+service-account*.json
+*service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.cer
+*.der
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.kdbx
+
+# Infrastructure state can contain plaintext secrets
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# -----------------------------------------------------------------------------
+# Local agent, planning, test, and runtime artifacts
+# -----------------------------------------------------------------------------
+.planning/
+.workbuddy/
+.zcode/
+.run-logs/
+task_plan.md
+findings.md
+progress.md
+gui-test-screenshots/
+playwright-report/
+blob-report/
+test-results/
+
+# -----------------------------------------------------------------------------
+# Python / Go runtime artifacts
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+venv/
+.venv/
+*.egg-info/
+
+backend-go/bin/
+backend-go/data/
+*.exe
+*.test
+*.out
+
+# Local databases, uploads, and logs
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.db
+staticfiles/
+media/
+agent_workspaces/
+logs/
+*.log
+*.log.*
+
+# -----------------------------------------------------------------------------
+# Frontend dependencies, builds, tests, and caches
+# -----------------------------------------------------------------------------
+node_modules/
+dist/
+dist-ssr/
+coverage/
+.nyc_output/
+.vite/
+.eslintcache
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# -----------------------------------------------------------------------------
+# Editors, operating systems, and temporary files
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.tmp
+*.temp
+*~
+
+# -----------------------------------------------------------------------------
+# Generated deployment outputs
+# -----------------------------------------------------------------------------
+frontend/nginx.generated.conf
+frontend/deployment.generated.json

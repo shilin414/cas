@@ -1,0 +1,598 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { validateAttachment, ATTACHMENT_LIMITS, getRun, fetchRunArtifacts } from '@/services/runApi';
+import {
+  applyEvent, finalizeRun, useRunChatStore, utf8ByteLength,
+} from '../useRunChatStore';
+import type { RunEventRecord } from '@/services/runApi';
+import type { RunChatState } from '../useRunChatStore';
+
+const axiosMocks = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock('@/services/axios', () => ({ default: { get: axiosMocks.get } }));
+
+// finalizeRun reconciles against GET /runs/:id; only that call is faked,
+// the pure validators above stay real.
+vi.mock('@/services/runApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/runApi')>();
+  return {
+    ...actual,
+    getRun: vi.fn(),
+    fetchRunArtifacts: vi.fn(async () => []),
+  };
+});
+
+const fiveMb = 5 * 1024 * 1024;
+const fortyMb = 40 * 1024 * 1024;
+
+function file(name: string, size: number, type = 'image/png'): File {
+  return new File([new Uint8Array(size)], name, { type });
+}
+
+describe('validateAttachment (official provider limits)', () => {
+  it('accepts png/jpg/pdf within size limits', () => {
+    expect(validateAttachment(file('a.png', 1000))).toBeNull();
+    expect(validateAttachment(file('b.jpg', 1000, 'image/jpeg'))).toBeNull();
+    expect(validateAttachment(file('c.pdf', 1000, 'application/pdf'))).toBeNull();
+    expect(validateAttachment(file('d.PNG', 1000))).toBeNull();
+  });
+
+  it('rejects disallowed extensions', () => {
+    expect(validateAttachment(file('virus.exe', 100))?.reason)
+      .toContain('png / jpg / pdf');
+    expect(validateAttachment(file('doc.docx', 100))?.reason)
+      .toContain('png / jpg / pdf');
+  });
+
+  it('rejects images over 5MB', () => {
+    expect(validateAttachment(file('big.png', fiveMb + 1))?.reason)
+      .toContain('5MB');
+  });
+
+  it('rejects non-image files over 40MB', () => {
+    expect(validateAttachment(file('big.pdf', fortyMb + 1, 'application/pdf'))?.reason)
+      .toContain('40MB');
+  });
+
+  it('caps per-run attachments at 8', () => {
+    expect(ATTACHMENT_LIMITS.maxPerRun).toBe(8);
+  });
+});
+
+describe('conversation cache reconciliation', () => {
+  beforeEach(() => {
+    useRunChatStore.getState().clearAll();
+  });
+
+  it("does not clear another conversation's loading state", async () => {
+    let resolveLoad!: (value: any) => void;
+    axiosMocks.get.mockReturnValueOnce(new Promise((resolve) => { resolveLoad = resolve; }));
+    useRunChatStore.setState({
+      conversations: {
+        7: { id: 7, title: '删除', messages: [], activeRunId: null },
+      },
+    });
+
+    const pending = useRunChatStore.getState().loadConversation(8);
+    expect(useRunChatStore.getState().isLoading).toBe(true);
+    useRunChatStore.getState().removeConversation(7);
+    expect(useRunChatStore.getState().isLoading).toBe(true);
+
+    resolveLoad({ title: '加载中的会话', messages: [] });
+    await pending;
+    expect(useRunChatStore.getState().isLoading).toBe(false);
+  });
+
+  it('drops a deleted conversation and clears active pointers to it', () => {
+    useRunChatStore.setState({
+      conversations: {
+        7: { id: 7, title: '删除', messages: [], activeRunId: null },
+        8: { id: 8, title: '保留', messages: [], activeRunId: null },
+      },
+      activeConversationId: 7,
+      lastConversationId: 7,
+    });
+
+    useRunChatStore.getState().removeConversation(7);
+
+    expect(useRunChatStore.getState()).toMatchObject({
+      conversations: {
+        8: { id: 8, title: '保留', messages: [], activeRunId: null },
+      },
+      activeConversationId: null,
+      lastConversationId: null,
+    });
+    expect(useRunChatStore.getState().conversations[7]).toBeUndefined();
+  });
+});
+
+describe('applyEvent (unified event protocol rendering)', () => {
+  const runId = 'run-1';
+
+  const stateWithStream = (): RunChatState => ({
+    ...useRunChatStore.getState(),
+    conversations: {
+      42: {
+        id: 42,
+        title: 't',
+        messages: [
+          { id: 'user-run-1', role: 'user', content: 'hi', created_at: '' },
+          {
+            id: 'run-run-1', role: 'assistant', content: '',
+            created_at: '', runId, status: 'streaming', artifacts: [],
+          },
+        ],
+        activeRunId: runId,
+      },
+    },
+  });
+
+  const event = (type: string, payload: Record<string, any>): RunEventRecord => ({
+    run_id: runId,
+    sequence: 1,
+    event_type: type,
+    payload,
+  });
+
+  const reduce = (state: RunChatState, evt: RunEventRecord): RunChatState =>
+    ({ ...state, ...applyEvent(state, evt) } as RunChatState);
+
+  it('content.delta appends incrementally', () => {
+    let state = stateWithStream();
+    state = reduce(state, event('content.delta', { text: '你' }));
+    expect(state.conversations[42].messages[1].content).toBe('你');
+    state = reduce(state, event('content.delta', { text: '好' }));
+    expect(state.conversations[42].messages[1].content).toBe('你好');
+  });
+
+  it('artifact.discovered pins an artifact card with the local id', () => {
+    let state = stateWithStream();
+    state = reduce(state, event('artifact.discovered', {
+      artifact_id: 'art-1', external_artifact_id: 'ext-1',
+      provider_artifact_type: 'sandbox_file', name: 'report.pdf',
+    }));
+    const artifacts = state.conversations[42].messages[1].artifacts;
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts![0]).toMatchObject({
+      artifactId: 'art-1', name: 'report.pdf', normalizedType: 'sandbox_file',
+    });
+    // duplicate discovery must not duplicate the card
+    state = reduce(state, event('artifact.discovered', {
+      artifact_id: 'art-1', provider_artifact_type: 'sandbox_file',
+    }));
+    expect(state.conversations[42].messages[1].artifacts).toHaveLength(1);
+  });
+
+  // 第九轮 P1-4（复审补丁）：durable chunk 是 INCREMENTAL，而同一段文本
+  // 也以 transient delta 的形式先到过一次。直接 append 会得到两份 ——
+  // "你好" 变成 "你好你好"。以下 5 个 case 锁死 offset 对账语义。
+  describe('content.chunk offset reconciliation (第九轮 P1-4)', () => {
+    const text = (state: RunChatState) => state.conversations[42].messages[1].content;
+
+    it('delta + delta + chunk must not duplicate the answer', () => {
+      let state = stateWithStream();
+      state = reduce(state, event('content.delta', { text: '你' }));
+      state = reduce(state, event('content.delta', { text: '好' }));
+      // "你好" is 6 UTF-8 bytes.
+      state = reduce(state, event('content.chunk', { text: '你好', offset: 6 }));
+      expect(text(state)).toBe('你好');
+    });
+
+    it('a replayed chunk alone renders the whole answer', () => {
+      const state = reduce(stateWithStream(), event('content.chunk', { text: '你好', offset: 6 }));
+      expect(text(state)).toBe('你好');
+    });
+
+    it('transient text followed by a durable replay of the same range keeps one copy', () => {
+      let state = stateWithStream();
+      state = reduce(state, event('content.delta', { text: 'A' }));
+      state = reduce(state, event('content.delta', { text: 'B' }));
+      state = reduce(state, event('content.delta', { text: 'C' }));
+      // The transport died after the deltas; the durable replay re-sends ABC.
+      state = reduce(state, event('content.chunk', { text: 'ABC', offset: 3 }));
+      expect(text(state)).toBe('ABC');
+    });
+
+    it('a partially rendered chunk appends only the missing suffix', () => {
+      let state = stateWithStream();
+      // chunk AB (offset 2), then a transient C that has NOT been coalesced
+      // yet, then chunk CD (offset 4): only "D" is new.
+      state = reduce(state, event('content.chunk', { text: 'AB', offset: 2 }));
+      state = reduce(state, event('content.delta', { text: 'C' }));
+      state = reduce(state, event('content.chunk', { text: 'CD', offset: 4 }));
+      expect(text(state)).toBe('ABCD');
+    });
+
+    it('survives multi-byte characters: 中文 and emoji offsets are UTF-8 bytes', () => {
+      let state = stateWithStream();
+      state = reduce(state, event('content.delta', { text: '中' })); // 3 bytes
+      state = reduce(state, event('content.delta', { text: '文' })); // 3 bytes
+      state = reduce(state, event('content.delta', { text: '🚀' })); // 4 bytes
+      expect(utf8ByteLength(text(state))).toBe(10);
+      // The coalescer flushed all three deltas as one chunk: end offset 10.
+      state = reduce(state, event('content.chunk', { text: '中文🚀', offset: 10 }));
+      expect(text(state)).toBe('中文🚀');
+    });
+
+    it('a historical chunk that still carries a snapshot replaces the content', () => {
+      let state = stateWithStream();
+      state = reduce(state, event('content.delta', { text: '过时的' }));
+      state = reduce(state, event('content.chunk', { text: 'x', snapshot: '权威答案' }));
+      expect(text(state)).toBe('权威答案');
+    });
+  });
+
+  // 第九轮补丁 3.2-A（复审报告 §二/§四）：SSE 网关故意采用
+  // subscribe → replay durable → drain buffered live 的顺序，因此
+  // "chunk 先到、它覆盖过的 buffered delta 后到" 是真实存在的线序，
+  // 而不是理论网络乱序。durable cursor 管不了 transient（sequence 恒 0），
+  // 唯一可靠信号是 delta 与 chunk 共用的绝对 UTF-8 字节 end offset。
+  describe('reverse order: chunk replayed before its buffered deltas (3.2-A)', () => {
+    const text = (state: RunChatState) => state.conversations[42].messages[1].content;
+
+    it('Test 1: chunk ABC then late deltas A/B/C renders ABC once', () => {
+      let state = stateWithStream();
+      state = reduce(state, event('content.chunk', { text: 'ABC', offset: 3 }));
+      state = reduce(state, event('content.delta', { text: 'A', offset: 1 }));
+      state = reduce(state, event('content.delta', { text: 'B', offset: 2 }));
+      state = reduce(state, event('content.delta', { text: 'C', offset: 3 }));
+      expect(text(state)).toBe('ABC');
+    });
+
+    it('Test 2: chunk AB then late A/B/C renders ABC (partial overlap)', () => {
+      let state = stateWithStream();
+      state = reduce(state, event('content.chunk', { text: 'AB', offset: 2 }));
+      state = reduce(state, event('content.delta', { text: 'A', offset: 1 }));
+      state = reduce(state, event('content.delta', { text: 'B', offset: 2 }));
+      state = reduce(state, event('content.delta', { text: 'C', offset: 3 }));
+      expect(text(state)).toBe('ABC');
+    });
+
+    it('Test 3: 中文/emoji reverse overlap renders 中文🚀 without corruption', () => {
+      let state = stateWithStream();
+      state = reduce(state, event('content.chunk', { text: '中文', offset: 6 }));
+      state = reduce(state, event('content.delta', { text: '中', offset: 3 }));
+      state = reduce(state, event('content.delta', { text: '文', offset: 6 }));
+      state = reduce(state, event('content.delta', { text: '🚀', offset: 10 }));
+      expect(text(state)).toBe('中文🚀');
+    });
+
+    it('Test 4: delta A, chunk ABC, late B/C still renders ABC once', () => {
+      let state = stateWithStream();
+      state = reduce(state, event('content.delta', { text: 'A', offset: 1 }));
+      state = reduce(state, event('content.chunk', { text: 'ABC', offset: 3 }));
+      state = reduce(state, event('content.delta', { text: 'B', offset: 2 }));
+      state = reduce(state, event('content.delta', { text: 'C', offset: 3 }));
+      expect(text(state)).toBe('ABC');
+    });
+
+    it('a legacy delta without an offset still appends (no hard backend coupling)', () => {
+      let state = stateWithStream();
+      state = reduce(state, event('content.chunk', { text: 'AB', offset: 2 }));
+      // Pre-3.2 backend: transient deltas carry no offset.
+      state = reduce(state, event('content.delta', { text: 'C' }));
+      expect(text(state)).toBe('ABC');
+    });
+  });
+
+  it('run.completed replaces content with the reconciled text and closes the run', () => {
+    let state = stateWithStream();
+    state = reduce(state, event('content.delta', { text: '流式片段' }));
+    state = reduce(state, event('run.completed', { status: 'succeeded', text: '最终答案' }));
+    const msg = state.conversations[42].messages[1];
+    expect(msg.content).toBe('最终答案');
+    expect(msg.status).toBe('done');
+    expect(state.conversations[42].activeRunId).toBeNull();
+  });
+
+  it('run.completed without text keeps accumulated deltas', () => {
+    let state = stateWithStream();
+    state = reduce(state, event('content.delta', { text: '流式片段' }));
+    state = reduce(state, event('run.completed', { status: 'succeeded' }));
+    expect(state.conversations[42].messages[1].content).toBe('流式片段');
+  });
+
+  it('run.failed surfaces the provider error', () => {
+    const state = reduce(
+      stateWithStream(),
+      event('run.failed', {
+        status: 'failed', error_code: 'aily_auth_error', error_message: 'no uat',
+      }),
+    );
+    const msg = state.conversations[42].messages[1];
+    expect(msg.status).toBe('failed');
+    expect(msg.error).toBe('no uat');
+  });
+
+  // Execution Correctness Closure (T3 前端侧): retry 是非终态 ——
+  // run.retrying 不得关闭流、不得清 activeRunId、不得改 status。
+  it('run.retrying keeps the run active and streaming', () => {
+    let state = stateWithStream();
+    state = reduce(state, event('content.delta', { text: '部分回答' }));
+    state = reduce(state, event('run.retrying', {
+      attempt: 1, max_attempts: 3, reason: 'aily_rate_limit',
+    }));
+    const conv = state.conversations[42];
+    const msg = conv.messages[1];
+    expect(msg.status).toBe('streaming'); // NOT done / failed
+    expect(conv.activeRunId).toBe(runId); // stream stays attached
+    expect(msg.content).toBe('部分回答'); // accumulated content preserved
+    expect(msg.retryNotice).toBeTruthy();
+  });
+
+  it('run.retrying followed by run.completed converges normally', () => {
+    let state = stateWithStream();
+    state = reduce(state, event('run.retrying', { attempt: 1, max_attempts: 3 }));
+    state = reduce(state, event('content.chunk', { text: '重试后的回答', snapshot: '重试后的回答' }));
+    state = reduce(state, event('run.completed', { status: 'succeeded', text: '重试后的回答' }));
+    const conv = state.conversations[42];
+    expect(conv.messages[1].status).toBe('done');
+    expect(conv.activeRunId).toBeNull();
+  });
+
+  // 第四轮 P1-2: run.cancelled 是管理员撤销（Hard Kill）的终态。
+  // 此前 reducer 没有该分支、finalizeRun 也只认 failed/interrupted，
+  // 于是 cancelled 被映射成 done —— 用户看到空白的“成功回答”。
+  it('run.cancelled closes the run as cancelled, not done', () => {
+    const state = reduce(
+      stateWithStream(),
+      event('run.cancelled', {
+        status: 'cancelled',
+        error_code: 'execution_disabled',
+        error_message: 'application or runtime binding was disabled before execution',
+      }),
+    );
+    const msg = state.conversations[42].messages[1];
+    expect(msg.status).toBe('cancelled');
+    expect(msg.error).toBe('应用或运行配置已停用，本次执行已取消。');
+    expect(state.conversations[42].activeRunId).toBeNull();
+  });
+
+  it('run.cancelled without a kill reason falls back to a generic notice', () => {
+    const state = reduce(stateWithStream(), event('run.cancelled', { status: 'cancelled' }));
+    expect(state.conversations[42].messages[1].status).toBe('cancelled');
+    expect(state.conversations[42].messages[1].error).toBe('执行已取消');
+  });
+
+  // 第四轮: run.deferred（Provider 暂停 / 执行检查不可用）是非终态。
+  it('run.deferred keeps the run streaming and shows a waiting notice', () => {
+    let state = stateWithStream();
+    state = reduce(state, event('content.delta', { text: '部分回答' }));
+    state = reduce(state, event('run.deferred', { reason: 'provider_disabled' }));
+    const conv = state.conversations[42];
+    expect(conv.messages[1].status).toBe('streaming');
+    expect(conv.activeRunId).toBe(runId);
+    expect(conv.messages[1].content).toBe('部分回答');
+    expect(conv.messages[1].retryNotice).toBe('服务暂时停用，等待恢复…');
+  });
+
+  it('run.deferred for an unavailable gate explains the wait', () => {
+    const state = reduce(
+      stateWithStream(),
+      event('run.deferred', { reason: 'run_gate_unavailable' }),
+    );
+    expect(state.conversations[42].messages[1].retryNotice)
+      .toBe('执行检查暂不可用，正在等待重试…');
+  });
+
+  it('run.started clears the deferred/retry notice', () => {
+    let state = stateWithStream();
+    state = reduce(state, event('run.deferred', { reason: 'provider_disabled' }));
+    expect(state.conversations[42].messages[1].retryNotice).toBeTruthy();
+    state = reduce(state, event('run.started', {}));
+    expect(state.conversations[42].messages[1].retryNotice).toBeUndefined();
+  });
+
+  it('legacy run.interrupted (historical replay) renders as failure', () => {
+    const state = reduce(
+      stateWithStream(),
+      event('run.interrupted', { reason: 'lease_expired' }),
+    );
+    const msg = state.conversations[42].messages[1];
+    expect(msg.status).toBe('failed');
+    expect(state.conversations[42].activeRunId).toBeNull();
+  });
+
+  // 第四轮 P1-2: 事件流可能没送到 run.cancelled（断线/重连），此时
+  // finalizeRun 用 GET Run 兜底 —— status=cancelled 绝不能被写成 done。
+  describe('finalizeRun (GET Run reconciliation)', () => {
+    beforeEach(() => {
+      vi.mocked(fetchRunArtifacts).mockResolvedValue([]);
+      useRunChatStore.setState({
+        ...useRunChatStore.getState(),
+        conversations: {
+          42: {
+            id: 42,
+            title: 't',
+            messages: [
+              { id: 'user-run-1', role: 'user', content: 'hi', created_at: '' },
+              {
+                id: 'run-run-1', role: 'assistant', content: '',
+                created_at: '', runId, status: 'streaming', artifacts: [],
+              },
+            ],
+            activeRunId: runId,
+          },
+        },
+      });
+    });
+
+    it('keeps a cancelled run cancelled (never done)', async () => {
+      vi.mocked(getRun).mockResolvedValue({
+        id: runId,
+        conversation: 42,
+        status: 'cancelled',
+        error_code: 'execution_disabled',
+      } as any);
+      await finalizeRun(runId);
+      const conv = useRunChatStore.getState().conversations[42];
+      expect(conv.messages[1].status).toBe('cancelled');
+      expect(conv.messages[1].error).toBe('应用或运行配置已停用，本次执行已取消。');
+      expect(conv.activeRunId).toBeNull();
+    });
+
+    it('maps a failed run to failed and a succeeded run to done', async () => {
+      vi.mocked(getRun).mockResolvedValue({
+        id: runId, conversation: 42, status: 'failed', error_message: 'boom',
+      } as any);
+      await finalizeRun(runId);
+      expect(useRunChatStore.getState().conversations[42].messages[1].status).toBe('failed');
+
+      vi.mocked(getRun).mockResolvedValue({
+        id: runId, conversation: 42, status: 'succeeded',
+      } as any);
+      await finalizeRun(runId);
+      expect(useRunChatStore.getState().conversations[42].messages[1].status).toBe('done');
+    });
+
+    // 第五轮 P1-1: finalizeRun 内部有两次 await（getRun + fetchRunArtifacts）。
+    // 请求飞行期间用户可能已经发起了 Run B；收尾必须用**最新** store state
+    // 做局部 merge，不能拿请求前的旧 conversation 快照整体覆盖。
+    it('finalizeRun preserves a newer active run', async () => {
+      let openBarrier!: () => void;
+      const barrier = new Promise<void>((resolve) => { openBarrier = resolve; });
+      let artifactRequested!: () => void;
+      const requested = new Promise<void>((resolve) => { artifactRequested = resolve; });
+
+      vi.mocked(getRun).mockResolvedValue({
+        id: runId,
+        conversation: 42,
+        status: 'succeeded',
+        output: { text: 'A 最终答案' },
+      } as any);
+      vi.mocked(fetchRunArtifacts).mockImplementation(async () => {
+        artifactRequested();
+        await barrier;
+        return [];
+      });
+
+      const pending = finalizeRun(runId);
+      // Wait until finalizeRun is parked on the artifact request.
+      await requested;
+
+      // 用户立刻发了下一条：Run B 成为 active run。
+      useRunChatStore.setState((s) => ({
+        conversations: {
+          ...s.conversations,
+          42: {
+            ...s.conversations[42],
+            messages: [
+              ...s.conversations[42].messages,
+              {
+                id: 'user-run-B', role: 'user' as const, content: '第二条',
+                created_at: '', runId: 'run-B',
+              },
+              {
+                id: 'run-run-B', role: 'assistant' as const, content: '',
+                created_at: '', runId: 'run-B', status: 'streaming' as const,
+                artifacts: [],
+              },
+            ],
+            activeRunId: 'run-B',
+          },
+        },
+      }));
+
+      openBarrier();
+      await pending;
+
+      const conv = useRunChatStore.getState().conversations[42];
+      const a = conv.messages.find((m) => m.id === `run-${runId}`);
+      expect(a?.status).toBe('done');
+      expect(a?.content).toBe('A 最终答案');
+      // Run B 的消息不能被 A 的收尾覆盖掉
+      expect(conv.messages.some((m) => m.id === 'user-run-B')).toBe(true);
+      expect(conv.messages.some((m) => m.id === 'run-run-B')).toBe(true);
+      // 也不能把 B 的 activeRunId 清成 null
+      expect(conv.activeRunId).toBe('run-B');
+    });
+
+    // 第五轮 P1-1: artifact 列表查询失败 = "不知道"，不能把事件流已经拿到
+    // 的 artifact 覆盖成 []。
+    it('finalizeRun preserves event artifacts when artifact refresh fails', async () => {
+      useRunChatStore.setState((s) => ({
+        conversations: {
+          ...s.conversations,
+          42: {
+            ...s.conversations[42],
+            messages: s.conversations[42].messages.map((m) => (
+              m.id === `run-${runId}`
+                ? {
+                    ...m,
+                    artifacts: [
+                      { artifactId: 'art-A', name: 'a.pdf', normalizedType: 'file' },
+                      { artifactId: 'art-B', name: 'b.pdf', normalizedType: 'file' },
+                    ],
+                  }
+                : m
+            )),
+          },
+        },
+      }));
+
+      vi.mocked(getRun).mockResolvedValue({
+        id: runId, conversation: 42, status: 'succeeded',
+      } as any);
+      vi.mocked(fetchRunArtifacts).mockRejectedValue(new Error('network down'));
+
+      await finalizeRun(runId);
+
+      const conv = useRunChatStore.getState().conversations[42];
+      const artifacts = conv.messages.find((m) => m.id === `run-${runId}`)?.artifacts;
+      expect(artifacts).toHaveLength(2);
+      expect(artifacts?.map((a) => a.artifactId)).toEqual(['art-A', 'art-B']);
+    });
+
+    // [] 是服务端的权威回答（确实没有 artifact），此时必须清空。
+    it('finalizeRun clears artifacts when the server reports none', async () => {
+      useRunChatStore.setState((s) => ({
+        conversations: {
+          ...s.conversations,
+          42: {
+            ...s.conversations[42],
+            messages: s.conversations[42].messages.map((m) => (
+              m.id === `run-${runId}`
+                ? {
+                    ...m,
+                    artifacts: [
+                      { artifactId: 'art-A', name: 'a.pdf', normalizedType: 'file' },
+                    ],
+                  }
+                : m
+            )),
+          },
+        },
+      }));
+
+      vi.mocked(getRun).mockResolvedValue({
+        id: runId, conversation: 42, status: 'succeeded',
+      } as any);
+      vi.mocked(fetchRunArtifacts).mockResolvedValue([]);
+
+      await finalizeRun(runId);
+
+      const conv = useRunChatStore.getState().conversations[42];
+      expect(conv.messages.find((m) => m.id === `run-${runId}`)?.artifacts).toEqual([]);
+    });
+  });
+
+  it('re-seeds the streaming bubble when a history reload wiped it', () => {
+    // Simulate: send created conversation 42, then a detail load replaced
+    // the store's copy with only the persisted user message.
+    const wiped: RunChatState = {
+      ...stateWithStream(),
+      conversations: {
+        42: {
+          id: 42, title: 't',
+          messages: [{ id: 'srv-1', role: 'user', content: 'hi', created_at: '' }],
+          activeRunId: null,
+        },
+      },
+      activeConversationId: 42,
+    };
+    const after = reduce(wiped, event('content.delta', { text: '流式内容' }));
+    const conv = after.conversations[42];
+    const seeded = conv.messages.find((m) => m.id === `run-${runId}`);
+    expect(seeded?.content).toBe('流式内容');
+    expect(seeded?.status).toBe('streaming');
+    expect(conv.activeRunId).toBe(runId);
+  });
+});

@@ -1,0 +1,109 @@
+/**
+ * MobileEnterpriseHome — 企业控制台移动首页（开发执行报告 §32–§34）：
+ * 概览 StatCard（2 列）+ 资源/权限/组织/平台四组 SettingsGroup 菜单。
+ * 导航 key 与桌面 Sider 完全一致（§88）。
+ */
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Button } from 'antd';
+import { enterpriseApi, type DirectoryStats, type SyncRun } from '../enterpriseApi';
+import { ENTERPRISE_SECTIONS, pagePath } from '../enterpriseNav';
+import { useAdminPermissionStore } from '@/stores/useAdminPermissionStore';
+import { useNavigate } from 'react-router-dom';
+import {
+  MobilePage,
+  MobileSection,
+  MobileSettingsGroup,
+  MobileSettingsRow,
+  MobileStatCard,
+} from '@/components/MobileConsole';
+import '../EnterpriseMobile.css';
+
+const STATUS_LABEL: Record<string, string> = {
+  success: '成功', failed: '失败', running: '进行中', pending: '等待中',
+};
+
+export default function MobileEnterpriseHome() {
+  const navigate = useNavigate();
+  const [stats, setStats] = useState<DirectoryStats | null>(null);
+  const [runs, setRuns] = useState<SyncRun[]>([]);
+  const [error, setError] = useState(false);
+  const identity = useAdminPermissionStore((state) => state.identity);
+  const permissionCodes = new Set(identity?.permissions.map((item) => item.code) ?? []);
+  const sections = identity ? ENTERPRISE_SECTIONS.map((section) => ({ ...section, items: section.items.filter((item) => identity.is_super_admin || (item.requiredAnyPermissions ? item.requiredAnyPermissions.some((code) => permissionCodes.has(code)) : permissionCodes.has(item.requiredPermission))) })).filter((section) => section.items.length > 0) : ENTERPRISE_SECTIONS;
+  const canDirectory = identity === null || Boolean(identity?.is_super_admin || permissionCodes.has('directory.read'));
+  const canSync = identity === null || Boolean(identity?.is_super_admin || permissionCodes.has('directory.sync.read'));
+
+  // 概览加载失败只影响概览本身（二次复审 P2-9）：给轻量错误提示 + 重试，
+  // 菜单永远可用，不阻塞导航。
+  const load = useCallback(() => {
+    setError(false);
+    const tasks: Promise<unknown>[] = [];
+    if (canDirectory) tasks.push(enterpriseApi.stats().then(setStats)); else setStats(null);
+    if (canSync) tasks.push(enterpriseApi.syncRuns(1).then(setRuns)); else setRuns([]);
+    void Promise.all(tasks).catch(() => setError(true));
+  }, [canDirectory, canSync]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const oauthMatch = stats && stats.oauth_users
+    ? Math.round((stats.linked_directory_users * 100) / stats.oauth_users)
+    : 0;
+
+  return (
+    <MobilePage>
+      <MobileSection title="企业概览">
+        {error ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="企业概览暂时无法加载"
+            action={<Button size="small" onClick={load}>重试</Button>}
+          />
+        ) : (
+          <>
+            <div className="mobile-console-stat-grid">
+              {canDirectory && <MobileStatCard
+                value={stats ? `${stats.departments_active} / ${stats.departments_total}` : '—'}
+                label="有效部门"
+              />}
+              {canDirectory && <MobileStatCard
+                value={stats ? `${stats.users_active} / ${stats.users_total}` : '—'}
+                label="有效员工"
+              />}
+              {canDirectory && <MobileStatCard
+                value={stats ? `${oauthMatch}%` : '—'}
+                label="OAuth 关联"
+                sub={stats ? `${stats.linked_directory_users} / ${stats.oauth_users}` : undefined}
+              />}
+              {canSync && <MobileStatCard
+                value={runs[0] ? (STATUS_LABEL[runs[0].status] ?? runs[0].status) : '未执行'}
+                label="最近同步"
+              />}
+            </div>
+            {stats && stats.users_resigned > 0 && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginTop: 12 }}
+                message={`目录中有 ${stats.users_resigned} 名离职员工，ACL 已自动排除。`}
+              />
+            )}
+          </>
+        )}
+      </MobileSection>
+
+      {sections.map((section) => (
+        <MobileSettingsGroup key={section.title} title={section.title}>
+          {section.items.map((item) => (
+            <MobileSettingsRow
+              key={item.key}
+              icon={item.icon}
+              title={item.label}
+              onClick={() => navigate(pagePath(item.key))}
+            />
+          ))}
+        </MobileSettingsGroup>
+      ))}
+    </MobilePage>
+  );
+}

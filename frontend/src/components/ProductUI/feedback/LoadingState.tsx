@@ -1,0 +1,3 @@
+import type { ReactNode } from 'react';
+export function LoadingState({ label = '正在加载…', rows = 3, page = false, compact = false, className = '' }: { label?: ReactNode; rows?: number; page?: boolean; compact?: boolean; className?: string }) { return <div className={`product-loading-state${page ? ' product-loading-state--page' : ''}${compact ? ' product-loading-state--compact' : ''} ${className}`.trim()} aria-busy="true" aria-live="polite"><span className="product-loading-state__label">{label}</span><div className="product-loading-state__rows" aria-hidden="true">{Array.from({ length: rows }, (_, index) => <span key={index} />)}</div></div>; }
+export function PageLoading({ label }: { label?: ReactNode }) { return <LoadingState label={label} rows={4} page />; }

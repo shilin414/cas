@@ -1,0 +1,151 @@
+/* 小安工作助手 design tokens: theme presets own the base colors; semantic tokens derive from them. */
+:root {
+  color-scheme: light;
+
+  --color-bg-void: #f5f6f7;
+  --color-bg-surface: #f7f8fa;
+  --color-bg-card: #ffffff;
+  --color-bg-elevated: #eff0f1;
+  --color-border: #dee0e3;
+  --color-border-lit: #b7bbc1;
+  --color-text: #1f2329;
+  --color-text-sec: #4e5969;
+  --color-text-dim: #646a73;
+  --color-primary: #2864dc;
+  --color-primary-hover: #1d4fbf;
+  --color-on-primary: #ffffff;
+  --color-success: #26834a;
+  --color-warning: #ad6800;
+  --color-error: #c53030;
+
+  --color-bg-hover: color-mix(in srgb, var(--color-text) 5%, transparent);
+  --color-bg-active: color-mix(in srgb, var(--color-text) 9%, transparent);
+  --color-bg-selected: color-mix(in srgb, var(--color-primary) 10%, var(--color-bg-card));
+  --color-border-hover: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+  --color-border-focus: color-mix(in srgb, var(--color-primary) 70%, transparent);
+  --color-text-disabled: color-mix(in srgb, var(--color-text) 38%, transparent);
+  --color-primary-soft: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  --color-primary-softer: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  --color-success-soft: color-mix(in srgb, var(--color-success) 14%, transparent);
+  --color-warning-soft: color-mix(in srgb, var(--color-warning) 15%, transparent);
+  --color-error-soft: color-mix(in srgb, var(--color-error) 13%, transparent);
+  --color-focus-ring: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  --color-overlay: color-mix(in srgb, #000000 44%, transparent);
+
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --space-8: 24px;
+  --space-9: 32px;
+  --space-10: 40px;
+  --space-11: 48px;
+
+  /* Compatibility aliases while legacy pages migrate to the numbered scale. */
+  --spacing-xs: var(--space-1);
+  --spacing-sm: var(--space-3);
+  --spacing-md: var(--space-6);
+  --spacing-lg: var(--space-8);
+  --spacing-xl: var(--space-9);
+
+  --radius-control: 10px;
+  --radius-card: 14px;
+  --radius-panel: 16px;
+  --radius-dialog: 18px;
+  --radius-large: 24px;
+  --radius-pill: 999px;
+  --border-radius-sm: 8px;
+  --border-radius-md: var(--radius-control);
+  --border-radius-lg: var(--radius-panel);
+  --border-radius-xl: var(--radius-large);
+
+  --control-h-xs: 28px;
+  --control-h-sm: 32px;
+  --control-h-md: 38px;
+  --control-h-lg: 44px;
+  --control-h-xl: 48px;
+
+  --font-size-display: 40px;
+  --font-size-page-title: 28px;
+  --font-size-section-title: 18px;
+  --font-size-card-title: 15px;
+  --font-size-body: 14px;
+  --font-size-meta: 12px;
+  --font-size-caption: 11px;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.6;
+  --line-height-relaxed: 1.75;
+
+  --content-compact: 920px;
+  --content-default: 1120px;
+  --content-wide: 1280px;
+  --content-max: 1440px;
+  --page-padding-inline: 32px;
+  --page-padding-block: 28px;
+
+  --motion-fast: 120ms;
+  --motion-normal: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --shadow-sm: 0 1px 2px rgba(31, 35, 41, 0.05);
+  --shadow-md: 0 4px 12px rgba(31, 35, 41, 0.08);
+  --shadow-lg: 0 12px 28px rgba(31, 35, 41, 0.12);
+  --shadow-focus: 0 0 0 3px var(--color-focus-ring);
+
+  --header-h: 56px;
+  --sidebar-w: 272px;
+  --sidebar-w-collapsed: 64px;
+  --breakpoint-mobile: 768px;
+  --breakpoint-shell: 1024px;
+  --chat-gutter: 24px;
+
+  --font-display: 'Space Grotesk', 'Noto Sans SC', sans-serif;
+  --font-body: 'Noto Sans SC', 'Space Grotesk', sans-serif;
+  --font-mono: 'SF Mono', 'Consolas', monospace;
+}
+
+:root[data-theme='feishu'] {
+  --radius-control: 8px;
+  --radius-card: 10px;
+  --radius-panel: 12px;
+  --radius-dialog: 12px;
+  --radius-large: 18px;
+  --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.dark {
+  color-scheme: dark;
+  --color-bg-void: #0c0c11;
+  --color-bg-surface: #14141c;
+  --color-bg-card: #1c1c28;
+  --color-bg-elevated: #242434;
+  --color-border: #2c2c3c;
+  --color-border-lit: #3a3a4e;
+  --color-text: #eaeaf0;
+  --color-text-sec: #a5a5b4;
+  --color-text-dim: #737386;
+  --color-primary: #e8a838;
+  --color-primary-hover: #f0c060;
+  --color-on-primary: #241700;
+  --color-success: #65c466;
+  --color-warning: #e8b34c;
+  --color-error: #ff7875;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.48);
+}
+
+@media (max-width: 768px) {
+  :root {
+    --page-padding-inline: 16px;
+    --page-padding-block: 20px;
+    --font-size-display: 32px;
+    --font-size-page-title: 24px;
+  }
+}

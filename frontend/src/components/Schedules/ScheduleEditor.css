@@ -1,0 +1,80 @@
+/* Automation editor uses the console's semantic theme, never a fixed accent. */
+.automation-editor-modal { top: max(24px, calc((100dvh - 820px) / 2)); max-width: calc(100vw - 48px); padding-bottom: 24px; }
+.automation-editor-modal .ant-modal-content { padding: 0; overflow: hidden; border-radius: var(--radius-dialog); background: var(--color-bg-card); }
+.automation-editor-modal .ant-modal-header { margin: 0; padding: var(--space-7) var(--space-8); background: var(--color-bg-card); border-bottom: 1px solid var(--color-border); }
+.automation-editor-modal .ant-modal-body { min-height: 0; }
+.automation-editor-modal .ant-modal-footer { position: sticky; bottom: 0; margin: 0; padding: var(--space-6) var(--space-8); border-top: 1px solid var(--color-border); background: var(--color-bg-card); }
+.automation-editor-modal .ant-modal-footer .ant-btn { min-width: 88px; height: var(--control-h-lg); }
+.automation-editor { color: var(--color-text); font-family: var(--font-body); }
+.automation-editor [hidden] { display: none !important; }
+.automation-editor--desktop { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; height: min(680px, calc(100dvh - 200px)); min-height: 320px; }
+.automation-editor__composer, .automation-editor__agent, .automation-editor__configuration { min-width: 0; }
+.automation-editor--desktop .automation-editor__composer { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: var(--space-8) var(--space-9) var(--space-7); }
+/* Reserve the help line and bottom gutter; let the prompt consume only remaining space. */
+.automation-editor--desktop .automation-editor__composer > .automation-editor__intro,
+.automation-editor--desktop .automation-editor__composer > .ant-form-item:not(.automation-editor__prompt) { flex-shrink: 0; }
+.automation-editor--desktop .automation-editor__composer .automation-editor__prompt { flex: 1; min-height: 188px; margin-bottom: 0; }
+.automation-editor--desktop .automation-editor__prompt > .ant-form-item-row { height: 100%; flex-direction: column; }
+.automation-editor--desktop .automation-editor__prompt .ant-form-item-control { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.automation-editor--desktop .automation-editor__prompt .ant-form-item-control-input { flex: 1; min-height: 120px; align-items: stretch; }
+.automation-editor--desktop .automation-editor__prompt .ant-form-item-control-input-content { display: flex; min-height: 0; }
+.automation-editor--desktop .automation-editor__prompt textarea { flex: 1; height: 100%; min-height: 120px; resize: none; }
+.automation-editor--desktop .automation-editor__prompt .ant-form-item-extra { flex-shrink: 0; margin-top: var(--space-2); }
+.automation-editor--desktop .automation-editor__prompt .ant-form-item-additional { flex-shrink: 0; }
+.automation-editor--desktop .automation-editor__agent { grid-column: 1; grid-row: 2; padding: var(--space-6) var(--space-9) var(--space-5); border-top: 1px solid var(--color-border); }
+.automation-editor--desktop .automation-editor__configuration { grid-column: 2; grid-row: 1 / 3; overflow-y: auto; overscroll-behavior: contain; padding: var(--space-8); border-left: 1px solid var(--color-border); background: var(--color-bg-surface); }
+.automation-editor__eyebrow { color: var(--color-primary); font-size: var(--font-size-meta); font-weight: 600; letter-spacing: .08em; }
+.automation-editor__intro h2 { margin: var(--space-3) 0; font-size: var(--font-size-section-title); line-height: var(--line-height-normal); color: var(--color-text); }
+.automation-editor__intro p { margin: 0 0 var(--space-8); font-size: var(--font-size-body); color: var(--color-text-dim); }
+.automation-editor .ant-form-item { margin-bottom: var(--space-7); }
+.automation-editor .ant-form-item-label > label { color: var(--color-text-sec); font-weight: 500; }
+.automation-editor .ant-input, .automation-editor .ant-select-selector, .automation-editor .ant-input-number { border-radius: var(--radius-control); }
+.automation-editor .ant-input, .automation-editor .ant-select-single, .automation-editor .ant-input-number { min-height: var(--control-h-lg); }
+.automation-editor .ant-input-number { width: 100%; }
+.automation-editor .ant-input-number-input { min-height: var(--control-h-lg); }
+.automation-editor .ant-input[type='datetime-local'], .automation-editor .ant-input[type='time'] { width: 100%; min-width: 0; max-width: 100%; color-scheme: inherit; }
+.automation-editor__prompt textarea { resize: vertical; min-height: 180px; padding: var(--space-6); line-height: var(--line-height-relaxed); background: var(--color-bg-surface); }
+.automation-editor__section h3 { display: flex; align-items: center; gap: var(--space-3); margin: 0 0 var(--space-7); font-size: var(--font-size-section-title); font-weight: 600; color: var(--color-text); }
+.automation-editor__section + .automation-editor__section { margin-top: var(--space-8); padding-top: var(--space-8); border-top: 1px solid var(--color-border); }
+.automation-editor__section .ant-radio-group { display: flex; flex-wrap: wrap; gap: var(--space-3) 0; }
+.automation-editor__section .ant-radio-button-wrapper { text-align: center; flex: 1; min-height: var(--control-h-lg); line-height: 42px; padding-inline: var(--space-5); }
+.automation-editor__section .ant-checkbox-group { gap: var(--space-5); }
+.automation-editor__section .ant-alert { margin-bottom: var(--space-6); }
+.automation-editor__advanced { margin-top: var(--space-6); border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-bg-card); }
+.automation-editor__advanced summary { cursor: pointer; padding: var(--space-5) var(--space-6); min-height: var(--control-h-lg); color: var(--color-text-sec); font-weight: 500; }
+.automation-editor__advanced-content { padding: var(--space-5) var(--space-6) 0; border-top: 1px solid var(--color-border); }
+.automation-editor .schedule-preview-btn { padding: var(--space-3) 0; min-height: var(--control-h-lg); background: transparent; border: none; color: var(--color-primary); cursor: pointer; font: inherit; }
+.automation-editor .schedule-preview-list { margin: var(--space-3) 0; padding-left: var(--space-7); font-size: var(--font-size-meta); line-height: var(--line-height-relaxed); color: var(--color-text-dim); }
+.automation-editor__row { display: flex; align-items: center; gap: var(--space-5); width: 100%; min-height: 60px; border: 0; padding: var(--space-6); background: transparent; font: inherit; color: var(--color-text); text-align: left; cursor: pointer; }
+.automation-editor__row > span:not(.automation-editor__row-value) { flex-shrink: 0; }
+.automation-editor__row-value { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3); margin-left: auto; min-width: 0; color: var(--color-text-dim); font-size: var(--font-size-meta); overflow-wrap: anywhere; text-align: right; }
+.automation-editor__row-value .anticon { flex-shrink: 0; }
+.automation-editor__row:active { background: var(--color-bg-hover); }
+.automation-editor__row:focus-visible, .automation-editor summary:focus-visible, .automation-editor .schedule-preview-btn:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+.automation-editor__navigation, .automation-editor--mobile .automation-editor__boundaries { overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-bg-card); }
+.automation-editor__navigation > * + *, .automation-editor--mobile .automation-editor__boundary + .automation-editor__boundary { border-top: 1px solid var(--color-border); }
+.automation-editor--mobile { padding-bottom: calc(var(--space-8) + env(safe-area-inset-bottom)); }
+.automation-editor--mobile .automation-editor__intro { padding-top: var(--space-3); }
+.automation-editor--mobile .automation-editor__intro h2 { font-size: var(--font-size-section-title); }
+.automation-editor--mobile .automation-editor__section + .automation-editor__section { margin: 0; padding: 0; border: 0; }
+.automation-editor--mobile .automation-editor__prompt textarea { min-height: 190px; }
+.automation-editor--mobile .automation-editor__boundaries { margin-block: var(--space-6); }
+.automation-editor--mobile .ant-radio-wrapper { min-height: var(--control-h-lg); align-items: center; }
+.automation-editor--mobile .ant-checkbox-wrapper { min-height: var(--control-h-lg); }
+.automation-editor--mobile .ant-input { font-size: 16px; }
+.automation-editor__hint { font-size: var(--font-size-meta); color: var(--color-text-dim); margin: var(--space-3) 0 0; }
+.automation-editor__error { margin: var(--space-3) var(--space-6); color: var(--color-error); font-size: var(--font-size-body); }
+.automation-boundary-sheet .ant-drawer-content { max-height: min(580px, 85dvh); border-radius: var(--radius-dialog) var(--radius-dialog) 0 0; background: var(--color-bg-card); color: var(--color-text); }
+.automation-boundary-sheet .ant-drawer-content-wrapper { max-height: 85dvh; }
+.automation-boundary-sheet .ant-radio-group { display: flex; gap: var(--space-6); flex-wrap: wrap; }
+.automation-boundary-sheet .ant-radio-wrapper { min-height: var(--control-h-lg); align-items: center; }
+.automation-boundary-sheet__date { margin-top: var(--space-6); }
+.automation-boundary-sheet__date label { display: block; margin-bottom: var(--space-3); color: var(--color-text-sec); }
+.automation-boundary-sheet__date input { width: 100%; min-width: 0; min-height: var(--control-h-lg); font-size: 16px; }
+.automation-boundary-sheet__footer { display: flex; justify-content: flex-end; gap: var(--space-5); padding: var(--space-3) 0 calc(var(--space-3) + env(safe-area-inset-bottom)); }
+.automation-boundary-sheet__footer .ant-btn { min-width: 88px; min-height: var(--control-h-lg); }
+@media (max-width: 767px) {
+  .automation-editor-modal { max-width: calc(100vw - 24px); top: 12px; }
+  .automation-editor--desktop { display: block; height: calc(100dvh - 180px); overflow-y: auto; }
+  .automation-editor--desktop .automation-editor__composer, .automation-editor--desktop .automation-editor__agent, .automation-editor--desktop .automation-editor__configuration { padding: var(--space-6); border-left: 0; overflow: visible; }
+}

@@ -1,0 +1,311 @@
+/* FeishuForwardModal — target picker styling (design tokens shared with the
+   chat surface). */
+
+.ffm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ffm-list {
+  height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-card);
+}
+
+.ffm-list__center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.ffm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.15s ease;
+}
+
+.ffm-row:hover {
+  background: var(--color-bg-elevated);
+}
+
+.ffm-row--on {
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.ffm-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.ffm-row__type {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--color-text-dim);
+}
+
+.ffm-row__check {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--color-border-lit);
+  border-radius: 50%;
+  color: var(--color-on-primary);
+  font-size: 10px;
+}
+
+.ffm-row__check--on {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+/* 最近转发 */
+.ffm-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ffm-recent__label {
+  font-size: 12px;
+  color: var(--color-text-dim);
+}
+
+.ffm-recent__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ffm-recent-chip {
+  max-width: 190px;
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-sec);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.ffm-recent-chip:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.ffm-recent-chip--on {
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  color: var(--color-primary);
+}
+
+/* 统一搜索下单个数据源失败时保留另一类可用结果。 */
+.ffm-partial-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-warning, #faad14) 8%, transparent);
+  color: var(--color-text-sec);
+  font-size: 12px;
+}
+
+.ffm-partial-error button {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* 底部操作 */
+.ffm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.ffm-cancel,
+.ffm-send {
+  border-radius: 10px;
+  padding: 7px 18px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ffm-cancel {
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-sec);
+}
+
+.ffm-cancel:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.ffm-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.ffm-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 重新授权引导 */
+.ffm-reauth {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 4px;
+}
+
+.ffm-reauth p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--color-text);
+}
+
+.ffm-reauth__hint {
+  font-size: 12px !important;
+  color: var(--color-text-dim) !important;
+}
+
+.ffm-reauth__btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border: 1px solid var(--color-primary);
+  border-radius: 10px;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* 目标加载失败态（五次复审 §28）：错误可见 + 重试，不静默成空列表。 */
+.ffm-list__error {
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ffm-error-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-surface);
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* 联系人 cursor 分页（六次复审 P1-3）：列表底部的续拉入口。 */
+.ffm-load-more {
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-top: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-dim);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.ffm-load-more:hover:not(:disabled) {
+  color: var(--color-primary);
+}
+
+.ffm-load-more:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* 分页失败（七次复审 P1-2）：已加载的行保持可见，底部只提示「更多
+   加载失败」+ 从断点重试续拉 —— 不是整个数据源失败。 */
+.ffm-paging-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-warning, #faad14) 8%, transparent);
+  font-size: 12px;
+  color: var(--color-text-sec);
+}
+
+.ffm-paging-error__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ffm-paging-error__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-surface);
+  color: var(--color-text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.ffm-paging-error__retry:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ffm-summary { padding: 12px; margin-bottom: 12px; border-radius: 10px; background: var(--color-bg-surface); border: 1px solid var(--color-border); color: var(--color-text-sec); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.ffm-summary p { margin: 4px 0; }
+.ffm-cancel, .ffm-send { min-height: 44px; }
+@media (max-width: 600px) { .ffm-list { max-height: 32dvh; } }

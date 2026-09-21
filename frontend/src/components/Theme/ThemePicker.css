@@ -1,0 +1,129 @@
+.theme-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.theme-picker__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.theme-picker__current {
+  color: var(--color-text-sec);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.theme-picker__options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.theme-picker__option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 56px;
+  padding: 8px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-card);
+  color: var(--color-text-sec);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.theme-picker__option:hover {
+  border-color: var(--color-border-lit);
+  color: var(--color-text);
+}
+
+.theme-picker__option:focus-within {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.theme-picker__option.is-selected {
+  border-color: var(--color-primary);
+  background: var(--color-bg-selected);
+  color: var(--color-text);
+  box-shadow: 0 0 0 1px var(--color-border-focus);
+}
+
+.theme-picker__radio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.theme-picker__swatch {
+  position: relative;
+  display: grid;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid;
+  border-radius: 50%;
+}
+
+.theme-picker__swatch > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.theme-picker__copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.theme-picker__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-picker__description {
+  overflow: hidden;
+  color: var(--color-text-dim);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .theme-picker__options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .theme-picker__option {
+    min-height: 44px;
+  }
+
+  .theme-picker__description {
+    display: none;
+  }
+}
+
+@media (max-width: 360px) {
+  .theme-picker__options {
+    grid-template-columns: 1fr;
+  }
+}

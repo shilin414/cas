@@ -1,0 +1,111 @@
+version: "2"
+sql:
+  - engine: "mysql"
+    schema: "db/migrations/*.up.sql"
+    queries: "db/queries"
+    gen:
+      go:
+        package: gendb
+        out: "internal/gen/db"
+        sql_package: "database/sql"
+        emit_json_tags: false
+        emit_empty_slices: true
+        emit_interface: true
+        overrides:
+          - column: "providers.supported_runtime_types"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "providers.capabilities"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "providers.retry_policy"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "providers.circuit_breaker"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "applications.tags"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "applications.default_config"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "runtime_bindings.capabilities"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "runtime_bindings.input_schema"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "runtime_bindings.output_schema"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "runtime_bindings.config"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "agent_threads.config"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "messages.metadata"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "runs.input"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "runs.output"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "runs.runtime_snapshot"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "run_events.payload"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "run_commands.payload"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "runtime_attachments.metadata"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "run_artifacts.metadata"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "outbox_events.payload"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "audit_logs.detail"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          - column: "conversation_shares.snapshot"
+            go_type:
+              import: "github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
+              type: "JSONText"
+          # runtime_attachments.run_id is a NULLable BINARY(16). sqlc's mysql
+          # engine maps that to sql.NullString, which would churn the 第十一轮
+          # attachment-bridge call sites (they pass uuid.Bytes()). A []byte
+          # override keeps the committed shape: slices scan NULL into nil, so
+          # nullable rows are safe and the ownership fence keeps passing the
+          # raw 16 bytes.
+          - column: "runtime_attachments.run_id"
+            go_type:
+              type: "[]byte"

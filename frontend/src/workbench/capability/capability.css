@@ -1,0 +1,7 @@
+.capability-picker { display: grid; gap: var(--space-5); }
+.capability-picker .product-search-field { width: 100%; max-width: none; }
+.capability-picker .product-segmented-tabs { width: 100%; }
+.capability-picker .product-segmented-tabs button { flex: 1; }
+.capability-picker__list { display: grid; max-height: 56vh; overflow: auto; padding: var(--space-1); gap: var(--space-1); }
+.capability-picker__tasks { display: grid; gap: var(--space-1); padding-bottom: var(--space-4); border-bottom: 1px solid var(--color-border); }
+.capability-picker__tasks h2 { margin: 0 0 var(--space-2); color: var(--color-text-sec); font-size: var(--font-size-meta); }

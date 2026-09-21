@@ -1,0 +1,21 @@
+{
+  "model_id": "PP-OCRv6_tiny",
+  "display_name": "内置 OCR（PP-OCRv6 Tiny）",
+  "adapter": "paddleocr_tiny",
+  "version": "ppocrv6-tiny-20260921",
+  "upstream_commit": "dab3fe35379033fdcb2d0e9572fac0b36c9a9ebf",
+  "resources": [
+    {
+      "name": "PP-OCRv6_tiny_det",
+      "size_bytes": 1792000,
+      "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d",
+      "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar"
+    },
+    {
+      "name": "PP-OCRv6_tiny_rec",
+      "size_bytes": 4526080,
+      "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
+      "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
+    }
+  ]
+}

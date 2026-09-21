@@ -1,0 +1,345 @@
+package http
+
+import (
+	"context"
+	"database/sql"
+	"log/slog"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/cors"
+
+	"github.com/shilin414/cas/backend-go/internal/accessgroup"
+	"github.com/shilin414/cas/backend-go/internal/adminrbac"
+	"github.com/shilin414/cas/backend-go/internal/aimodel"
+	modelruntime "github.com/shilin414/cas/backend-go/internal/aimodel/runtime"
+	"github.com/shilin414/cas/backend-go/internal/automation/schedule"
+	"github.com/shilin414/cas/backend-go/internal/automation/scheduler"
+	"github.com/shilin414/cas/backend-go/internal/businessapps"
+	"github.com/shilin414/cas/backend-go/internal/catalog"
+	"github.com/shilin414/cas/backend-go/internal/directory"
+	"github.com/shilin414/cas/backend-go/internal/enterpriseaccess"
+	"github.com/shilin414/cas/backend-go/internal/execution"
+	genapi "github.com/shilin414/cas/backend-go/internal/gen/api"
+	"github.com/shilin414/cas/backend-go/internal/identity"
+	"github.com/shilin414/cas/backend-go/internal/platform/config"
+	"github.com/shilin414/cas/backend-go/internal/platform/redisx"
+	"github.com/shilin414/cas/backend-go/internal/platform/storage"
+	"github.com/shilin414/cas/backend-go/internal/platform/telemetry"
+	"github.com/shilin414/cas/backend-go/internal/transport/sse"
+)
+
+// FeishuUserTokenResolver is the subset of the provider auth machinery the
+// forwarding handlers need (aily.AuthResolver satisfies it).
+type FeishuUserTokenResolver interface {
+	UserAccessToken(ctx context.Context, userID int64) (string, error)
+}
+
+// IdentitySessionStore is the session-store surface used by HTTP handlers.
+// The interface keeps logout failure handling testable without weakening the
+// concrete Redis-backed implementation used by middleware and production.
+type IdentitySessionStore interface {
+	CookieName() string
+	CSRFName() string
+	Create(ctx context.Context, sess identity.Session) (token, csrf string, err error)
+	Get(ctx context.Context, token string) (*identity.Session, error)
+	Revoke(ctx context.Context, token string) error
+	Refresh(ctx context.Context, token string)
+}
+
+// Server implements genapi.ServerInterface. Every dependency is injected;
+// no globals.
+type Server struct {
+	AIModels       *aimodel.Service
+	AIModelRuntime *modelruntime.Executor
+	aiUploadOnce   sync.Once
+	aiUploadSlots  chan struct{}
+	Config         *config.Config
+	DB             *sql.DB
+	Log            *slog.Logger
+	Metric         *telemetry.Metrics
+	Redis          *redisx.Client
+
+	IdentityRepo *identity.Repo
+	Store        IdentitySessionStore
+	StateCodec   *identity.StateCodec
+	Oauth        *identity.ExchangeOrchestrator
+	Feishu       *identity.FeishuClient
+	// FeishuAuth supplies a cached/refreshed user access token for the
+	// caller (implemented by aily.AuthResolver).
+	FeishuAuth FeishuUserTokenResolver
+
+	Catalog          *catalog.Service
+	CatalogRepo      *catalog.Repo
+	Registry         *catalog.RuntimeRegistry
+	Directory        *directory.Service
+	DirectoryRepo    *directory.Repo
+	EnterpriseAccess *enterpriseaccess.Service
+	AdminRBAC        *adminrbac.Service
+	AccessGroups     *accessgroup.Service
+
+	Runs    *execution.Service
+	Storage storage.Storage
+
+	BusinessApps           *businessapps.Service
+	BusinessSnapshots      businessapps.SnapshotStore
+	BusinessForwardLimiter *execution.RateLimiter
+	BusinessAppLimiter     *execution.RateLimiter
+	RateLimitArtifacts     *execution.RateLimiter
+
+	// RunAdmission meters run creation per user (评测 P1-7). It is a
+	// long-lived limiter so the in-process fallback keeps per-user state
+	// when Redis is unreachable.
+	RunAdmission *execution.RateLimiter
+
+	// Schedule automation.
+	Schedules *schedule.Service
+	Scheduler *scheduler.Scheduler
+
+	SSE *sse.Gateway
+
+	// adminLoginLimiter throttles local admin logins (username+IP,
+	// 修复计划 §41); initialized lazily on first admin login.
+	adminLoginLimiter     *loginAttemptLimiter
+	adminLoginPeerLimiter *loginAttemptLimiter
+	adminLimiterOnce      sync.Once
+	trustedProxyOnce      sync.Once
+	trustedProxyNets      []*net.IPNet
+
+	router chi.Router
+}
+
+// publicRoutes are served without authentication (path+method table; the
+// generated mux registers every route, auth is enforced by middleware).
+var publicRoutes = map[string]bool{
+	"GET /api/identity/oauth/start":    true,
+	"GET /api/identity/oauth/exchange": true,
+	"POST /api/identity/admin/login":   true,
+	"POST /api/auth/login/":            true,
+	"POST /api/auth/logout/":           true,
+	"POST /api/auth/token/refresh/":    true,
+	// ⚠️ `GET /api/v2/applications/*/avatar` is deliberately ABSENT (二次复审
+	// P0-4). It used to be public, which made every avatar readable by
+	// sequential application id without a session — an enumeration oracle
+	// for the catalog. An <img> on a studio page is a same-origin request
+	// and already carries the Studio Session cookie, so requiring auth
+	// costs nothing. A public share must expose an avatar through
+	// /api/v2/public/shares/{token}/... (share-token-gated), never here.
+	"GET /api/v2/artifacts/*/open": true,
+	"GET /api/v2/runs/*/stream":    true,
+	"GET /api/v2/public/shares/*":  true,
+}
+
+// isInfraPath allows health/metrics probes without authentication.
+func isInfraPath(path string) bool {
+	return path == "/health/live" || path == "/health/ready" || path == "/metrics"
+}
+
+func isPublicRoute(method, path string) bool {
+	if ok, exists := publicRoutes[method+" "+path]; exists {
+		return ok
+	}
+	// Share artifact resolution: the share token is the capability, so any
+	// /open under a token is public (artifact membership is checked in the
+	// handler — it must be referenced by the snapshotted messages).
+	if method == http.MethodGet &&
+		strings.HasPrefix(path, "/api/v2/public/shares/") &&
+		strings.HasSuffix(path, "/open") {
+		return true
+	}
+	// Wildcard forms for parameterized paths.
+	prefix := ""
+	if i := strings.LastIndex(path, "/"); i > 0 {
+		prefix = path[:i+1]
+	}
+	switch method + " " + prefix + "*" {
+	// No /applications/*/avatar case — see publicRoutes (P0-4).
+	case "GET /api/v2/artifacts/*/open":
+		return strings.HasPrefix(path, "/api/v2/artifacts/") && strings.HasSuffix(path, "/open")
+	case "GET /api/v2/runs/*/stream":
+		return strings.HasPrefix(path, "/api/v2/runs/") && strings.HasSuffix(path, "/stream")
+	case "GET /api/v2/public/shares/*":
+		return strings.HasPrefix(path, "/api/v2/public/shares/")
+	}
+	return false
+}
+
+// authMiddleware enforces authentication for everything not in publicRoutes.
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isPublicRoute(r.Method, r.URL.Path) || isInfraPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if userFrom(r.Context()) == nil {
+			writeDetail(w, http.StatusUnauthorized, "Authentication credentials were not provided.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Router builds the chi router with middleware and generated routes.
+func (s *Server) Router() http.Handler {
+	if s.router != nil {
+		return s.router
+	}
+	r := chi.NewRouter()
+	r.Use(Recovery())
+	r.Use(RequestInfo())
+	r.Use(Metrics(s.Metric, normalizeRoute))
+	r.Use(SessionAuth(s.Store, s.IdentityRepo))
+	r.Use(s.authMiddleware)
+	r.Use(CSRF(s.Store, s.Config.Env != "production"))
+
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:3030", "http://localhost:3031", "http://localhost:3032", "http://127.0.0.1:3030"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-CSRF-Token", "X-Organization-ID", "X-Request-Id"},
+		ExposedHeaders:   []string{"X-Request-Id"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
+	// Health & metrics (infra, outside the API contract).
+	r.Get("/health/live", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	r.Get("/health/ready", s.handleReady)
+	r.Get("/metrics", s.Metric.Handler().ServeHTTP)
+
+	// Extensible enterprise sync routes; legacy contract routes remain generated below.
+	s.registerSyncTargetRoutes(r)
+	s.registerBusinessAppRoutes(r)
+
+	// All contract routes from the generated spec.
+	genapi.HandlerFromMux(s, r)
+
+	s.router = r
+	return r
+}
+
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	if err := s.DB.PingContext(ctx); err != nil {
+		writeSimpleError(w, http.StatusServiceUnavailable, "database not ready")
+		return
+	}
+	if err := s.Redis.Ping(ctx).Err(); err != nil {
+		writeSimpleError(w, http.StatusServiceUnavailable, "redis not ready")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok"))
+}
+
+// normalizeRoute collapses ids for stable metric labels.
+func normalizeRoute(r *http.Request) string {
+	p := r.URL.Path
+	if i := strings.Index(p, "/api/"); i > 0 {
+		p = p[i:]
+	}
+	switch {
+	case strings.HasPrefix(p, "/api/v2/admin/ai-models/"):
+		parts := strings.Split(strings.TrimPrefix(p, "/api/v2/admin/ai-models/"), "/")
+		if len(parts) > 1 {
+			parts[1] = "{id}"
+		}
+		if len(parts) > 3 {
+			parts[3] = "{attachmentId}"
+		}
+		return "/api/v2/admin/ai-models/" + strings.Join(parts, "/")
+	// Static routes MUST precede the dynamic `/applications/{id}` prefix
+	// (四次复审 P2-R1): `/page`, `/resolve` and `/resolve-mention` would
+	// otherwise be labeled as an application id, polluting request counts,
+	// error rates and percentiles for the single-row endpoint.
+	case p == "/api/v2/applications/page":
+		return p
+	case p == "/api/v2/applications/resolve":
+		return p
+	case p == "/api/v2/applications/resolve-mention":
+		return p
+	case p == "/api/v2/workspace/bootstrap":
+		return p
+	case p == "/api/v2/admin/sync-targets" || p == "/api/v2/admin/sync-jobs" || p == "/api/v2/admin/sync-batches":
+		return p
+	case strings.HasPrefix(p, "/api/v2/admin/sync-targets/"):
+		if strings.HasSuffix(p, "/config") {
+			return "/api/v2/admin/sync-targets/{target}/config"
+		}
+		if strings.HasSuffix(p, "/jobs") {
+			return "/api/v2/admin/sync-targets/{target}/jobs"
+		}
+		return "/api/v2/admin/sync-targets/{target}"
+	case strings.HasPrefix(p, "/api/v2/admin/sync-batches/"):
+		return "/api/v2/admin/sync-batches/{id}"
+	case p == "/api/v2/tasks":
+		return p
+	case strings.HasPrefix(p, "/api/v2/tasks/"):
+		return "/api/v2/tasks/{id}"
+	case p == "/api/v2/applications":
+		return p
+	case strings.HasPrefix(p, "/api/v2/applications/"):
+		if strings.HasSuffix(p, "/avatar") {
+			return "/api/v2/applications/{id}/avatar"
+		}
+		if strings.HasSuffix(p, "/favorite") {
+			return "/api/v2/applications/{id}/favorite"
+		}
+		if strings.HasSuffix(p, "/default-agent") {
+			return "/api/v2/applications/{id}/default-agent"
+		}
+		if strings.HasSuffix(p, "/attachments") {
+			return "/api/v2/applications/{id}/attachments"
+		}
+		return "/api/v2/applications/{id}"
+	case strings.HasPrefix(p, "/api/v2/runs/"):
+		if strings.HasSuffix(p, "/events") {
+			return "/api/v2/runs/{id}/events"
+		}
+		if strings.HasSuffix(p, "/stream") {
+			return "/api/v2/runs/{id}/stream"
+		}
+		if strings.HasSuffix(p, "/commands") {
+			return "/api/v2/runs/{id}/commands"
+		}
+		if strings.HasSuffix(p, "/attachments") {
+			return "/api/v2/runs/{id}/attachments"
+		}
+		if strings.HasSuffix(p, "/artifacts") {
+			return "/api/v2/runs/{id}/artifacts"
+		}
+		return "/api/v2/runs/{id}"
+	case strings.HasPrefix(p, "/api/v2/schedules/"):
+		if strings.HasSuffix(p, "/run-now") {
+			return "/api/v2/schedules/{id}/run-now"
+		}
+		if strings.HasSuffix(p, "/enable") {
+			return "/api/v2/schedules/{id}/enable"
+		}
+		if strings.HasSuffix(p, "/disable") {
+			return "/api/v2/schedules/{id}/disable"
+		}
+		if strings.HasSuffix(p, "/occurrences") {
+			return "/api/v2/schedules/{id}/occurrences"
+		}
+		if strings.HasSuffix(p, "/preview") {
+			return "/api/v2/schedules/preview"
+		}
+		return "/api/v2/schedules/{id}"
+	case strings.HasPrefix(p, "/api/v2/artifacts/"):
+		return "/api/v2/artifacts/{id}/open"
+	case strings.HasPrefix(p, "/api/v2/public/shares/"):
+		if strings.HasSuffix(p, "/open") {
+			return "/api/v2/public/shares/{token}/artifacts/{id}/open"
+		}
+		return "/api/v2/public/shares/{token}"
+	}
+	return p
+}

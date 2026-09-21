@@ -1,0 +1,8 @@
+.template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: var(--space-5); }
+.template-card { min-height: 390px; }
+.template-card__visual { position: relative; display: grid; width: 100%; height: 100%; place-items: center; background: radial-gradient(circle at 72% 22%, var(--color-primary-soft), transparent 38%), linear-gradient(145deg, var(--color-bg-elevated), var(--color-bg-surface)); }
+.template-card__visual > img { width: 100%; height: 100%; object-fit: cover; }
+.template-card__visual > span { font-size: 50px; }
+.template-card__badges { position: absolute; top: var(--space-5); right: var(--space-5); left: var(--space-5); display: flex; justify-content: space-between; }
+.template-card__open { flex: none; color: var(--color-primary); font-size: var(--font-size-meta); font-weight: 600; }
+@media (max-width: 768px) { .template-grid { grid-template-columns: 1fr; } }

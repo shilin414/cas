@@ -1,0 +1,9 @@
+**/node_modules
+**/dist
+**/.env*
+.git
+.run-logs
+.planning
+backend-go
+**/nginx.generated.conf
+**/deployment.generated.json

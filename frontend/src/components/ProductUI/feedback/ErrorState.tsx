@@ -1,0 +1,3 @@
+import type { ReactNode } from 'react';
+import { WarningOutlined } from '@ant-design/icons';
+export function ErrorState({ title = '加载失败', description, action, compact = false, className = '' }: { title?: ReactNode; description?: ReactNode; action?: ReactNode; compact?: boolean; className?: string }) { return <div className={`product-feedback-state product-feedback-state--error${compact ? ' product-feedback-state--compact' : ''} ${className}`.trim()} role="alert"><div className="product-feedback-state__icon"><WarningOutlined /></div><h2>{title}</h2>{description && <p>{description}</p>}{action && <div className="product-feedback-state__action">{action}</div>}</div>; }

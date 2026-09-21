@@ -1,0 +1,231 @@
+-- ───────────────────────────────────────────────────────── conversation ──
+
+-- name: CreateConversation :execresult
+INSERT INTO conversations (user_id, application_id, organization_id, title)
+VALUES (?, ?, NULL, ?);
+
+-- name: GetConversationByID :one
+SELECT id, user_id, application_id, organization_id, title, created_at, updated_at
+FROM conversations WHERE id = ?;
+
+-- name: ListConversationsByApplication :many
+SELECT id, user_id, application_id, organization_id, title, created_at, updated_at
+FROM conversations
+WHERE user_id = ? AND application_id = ?
+ORDER BY updated_at DESC;
+
+-- name: GetAgentThreadByConversation :one
+SELECT id, conversation_id, provider, remote_id, status, auth_mode, auth_subject_key,
+       config, created_at, updated_at
+FROM agent_threads WHERE conversation_id = ?;
+
+-- name: CreateAgentThread :execresult
+INSERT INTO agent_threads (id, conversation_id, provider, remote_id, status, auth_mode, auth_subject_key, config)
+VALUES (?, ?, ?, '', 'idle', ?, ?, NULL);
+
+-- name: BindAgentThreadSession :exec
+UPDATE agent_threads SET remote_id = ?, status = 'active' WHERE id = ?;
+
+-- name: BindAgentThreadSessionOwned :execresult
+-- Set-once session bind (修复计划 §27-28): binding succeeds when the
+-- remote_id is empty OR already equals the value (idempotent re-bind by
+-- the same session). 0 rows = a DIFFERENT session owns the thread — the
+-- caller must treat that as a conflict, never overwrite.
+UPDATE agent_threads
+SET remote_id = ?, status = 'active'
+WHERE id = ? AND (remote_id = '' OR remote_id = ?);
+
+-- name: GetAgentThreadByID :one
+SELECT id, conversation_id, provider, remote_id, status, auth_mode, auth_subject_key,
+       config, created_at, updated_at
+FROM agent_threads WHERE id = ?;
+
+-- name: CreateMessage :execresult
+INSERT INTO messages (conversation_id, role, content, metadata) VALUES (?, ?, ?, ?);
+
+-- name: ListMessagesByConversation :many
+SELECT id, conversation_id, role, content, metadata, created_at
+FROM messages WHERE conversation_id = ? ORDER BY id;
+
+-- name: CountMessagesByConversation :one
+SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?;
+
+-- name: ListConversationsForUser :many
+-- Sidebar history: latest message + count via correlated scalar subqueries
+-- in the SELECT list (window functions are MySQL 8 only — the project must
+-- stay 5.7-compatible).
+SELECT c.id, c.title, c.application_id, c.updated_at,
+       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count,
+       (SELECT m2.role FROM messages m2 WHERE m2.conversation_id = c.id ORDER BY m2.id DESC LIMIT 1) AS last_role,
+       (SELECT m2.content FROM messages m2 WHERE m2.conversation_id = c.id ORDER BY m2.id DESC LIMIT 1) AS last_content,
+       (SELECT m2.created_at FROM messages m2 WHERE m2.conversation_id = c.id ORDER BY m2.id DESC LIMIT 1) AS last_created
+FROM conversations c
+WHERE c.user_id = ?
+ORDER BY c.updated_at DESC
+LIMIT 200;
+
+-- name: ListConversationsForUserApp :many
+SELECT c.id, c.title, c.application_id, c.updated_at,
+       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count,
+       (SELECT m2.role FROM messages m2 WHERE m2.conversation_id = c.id ORDER BY m2.id DESC LIMIT 1) AS last_role,
+       (SELECT m2.content FROM messages m2 WHERE m2.conversation_id = c.id ORDER BY m2.id DESC LIMIT 1) AS last_content,
+       (SELECT m2.created_at FROM messages m2 WHERE m2.conversation_id = c.id ORDER BY m2.id DESC LIMIT 1) AS last_created
+FROM conversations c
+WHERE c.user_id = ? AND c.application_id = ?
+ORDER BY c.updated_at DESC
+LIMIT 200;
+
+-- name: ListTasksByUserPage :many
+-- Product Task facade backed by conversations. Stable keyset order keeps the
+-- result bounded and repeatable while new tasks are created concurrently.
+SELECT c.id,
+       c.title,
+       c.application_id,
+       c.created_at,
+       c.updated_at,
+       a.slug AS application_slug,
+       a.name AS application_name,
+       a.icon AS application_icon,
+       a.color AS application_color,
+       a.kind AS application_kind,
+       COALESCE((SELECT m.role FROM messages m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1), '') AS preview_role,
+       COALESCE((SELECT m.content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1), '') AS preview,
+       CASE
+         WHEN EXISTS (
+           SELECT 1 FROM runs r
+           WHERE r.conversation_id = c.id
+             AND r.status NOT IN ('cancelled', 'succeeded', 'failed', 'interrupted')
+         ) THEN 'running'
+         WHEN (SELECT r2.status FROM runs r2 WHERE r2.conversation_id = c.id ORDER BY r2.created_at DESC, r2.id DESC LIMIT 1)
+              IN ('failed', 'interrupted') THEN 'error'
+         ELSE 'idle'
+       END AS execution_state
+FROM conversations c
+LEFT JOIN applications a ON a.id = c.application_id
+WHERE c.user_id = sqlc.arg('user_id')
+  AND (sqlc.narg('application_id') IS NULL OR c.application_id = sqlc.narg('application_id'))
+  AND (sqlc.narg('search') IS NULL
+       OR c.title COLLATE utf8mb4_unicode_ci LIKE sqlc.arg('search_like'))
+  AND (sqlc.narg('cursor_updated_at') IS NULL
+       OR c.updated_at < sqlc.narg('cursor_updated_at')
+       OR (c.updated_at = sqlc.narg('cursor_updated_at') AND c.id < sqlc.arg('cursor_id')))
+ORDER BY c.updated_at DESC, c.id DESC
+LIMIT ?;
+
+-- name: GetTaskByIDOwned :one
+SELECT c.id,
+       c.title,
+       c.application_id,
+       c.created_at,
+       c.updated_at,
+       a.slug AS application_slug,
+       a.name AS application_name,
+       a.icon AS application_icon,
+       a.color AS application_color,
+       a.kind AS application_kind,
+       COALESCE((SELECT m.role FROM messages m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1), '') AS preview_role,
+       COALESCE((SELECT m.content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1), '') AS preview,
+       CASE
+         WHEN EXISTS (
+           SELECT 1 FROM runs r
+           WHERE r.conversation_id = c.id
+             AND r.status NOT IN ('cancelled', 'succeeded', 'failed', 'interrupted')
+         ) THEN 'running'
+         WHEN (SELECT r2.status FROM runs r2 WHERE r2.conversation_id = c.id ORDER BY r2.created_at DESC, r2.id DESC LIMIT 1)
+              IN ('failed', 'interrupted') THEN 'error'
+         ELSE 'idle'
+       END AS execution_state
+FROM conversations c
+LEFT JOIN applications a ON a.id = c.application_id
+WHERE c.id = ? AND c.user_id = ?;
+
+-- name: RenameTaskOwned :execresult
+UPDATE conversations
+SET title = ?
+WHERE id = ? AND user_id = ?;
+
+-- name: DeleteConversationMessages :exec
+DELETE FROM messages WHERE conversation_id = ?;
+
+-- name: DeleteConversationRuns :many
+-- Returns run ids so the caller can purge their children in Go.
+SELECT id FROM runs WHERE conversation_id = ?;
+
+-- name: DeleteRunEvents :exec
+DELETE FROM run_events WHERE run_id = ?;
+
+-- name: DeleteRunArtifacts :exec
+DELETE FROM run_artifacts WHERE run_id = ?;
+
+-- name: DeleteRunCommands :exec
+DELETE FROM run_commands WHERE run_id = ?;
+
+-- name: DeleteRunLeaseByRun :exec
+DELETE FROM run_leases WHERE run_id = ?;
+
+-- name: DeleteRunRequestsByRun :exec
+-- 第九轮 P1: the idempotency reservation table. Neither table added in
+-- round nine is reachable by an FK cascade from `runs`, so both are purged
+-- explicitly here — otherwise deleting a conversation would leave the
+-- client_request_id pointing at a run that no longer exists, and every later
+-- replay of that id would answer 500 instead of serving the run.
+DELETE FROM run_requests WHERE run_id = ?;
+
+-- name: DeleteProviderSubmissionsByRun :exec
+-- Same reason as DeleteRunRequestsByRun: the provider-side submission
+-- ledger outlives its run unless this cascade deletes it.
+DELETE FROM provider_submissions WHERE run_id = ?;
+
+-- name: DeleteRunsByConversation :exec
+DELETE FROM runs WHERE conversation_id = ?;
+
+-- name: UnbindConversationAttachments :exec
+DELETE FROM runtime_attachments WHERE conversation_id = ?;
+
+-- name: DeleteThreadByConversation :exec
+DELETE FROM agent_threads WHERE conversation_id = ?;
+
+-- name: DeleteConversation :exec
+DELETE FROM conversations WHERE id = ?;
+
+-- name: GetConversationRowForUpdate :one
+-- Conversation admission lock (评测 P0-2): CreateRunInTx takes this lock so
+-- the active-run count is re-read under it — two concurrent submits to the
+-- same conversation serialize and the loser sees the winner's run.
+SELECT id FROM conversations WHERE id = ? FOR UPDATE;
+
+-- name: CountActiveRunsByConversation :one
+-- ACTIVE = NOT SETTLED (第四轮 P2 / 第五轮 P2-1). The status list used to be
+-- hard-coded to ('queued','running'); the domain has nine states and the
+-- only settled ones are cancelled/succeeded/failed plus the legacy
+-- `interrupted` alias (execution.IsSettled).
+--
+-- `interrupted` MUST be in this list: it is a pre-closure terminal alias
+-- that new code never writes, and migration 0018 rewrites historical rows
+-- to `failed`. Until that migration has run — and for any row a restore
+-- brings back — an interrupted run would otherwise be counted as ACTIVE
+-- forever and pin the conversation at 409 on every subsequent send.
+-- Backed by idx_runs_conversation_status (migration 0014).
+SELECT COUNT(*) AS n FROM runs
+WHERE conversation_id = ? AND status NOT IN ('cancelled', 'succeeded', 'failed', 'interrupted');
+
+-- name: CountScheduledRunsByConversation :one
+-- Lifetime guard (评测 P1): a run created by the scheduler owns an
+-- occurrence and may still owe a pending delivery. Physically deleting it
+-- would leave schedule_occurrences.run_id dangling and make the delivery
+-- worker's GetRunByID fail → a timed-out notification.
+SELECT COUNT(*) AS n FROM runs
+WHERE conversation_id = ? AND trigger_type = 'scheduled';
+
+-- name: CountDeliveriesByConversation :one
+-- Same guard, direct: any delivery execution hanging off this
+-- conversation's runs must keep them alive.
+SELECT COUNT(*) AS n FROM delivery_executions d
+JOIN runs r ON r.id = d.run_id
+WHERE r.conversation_id = ?;
+
+-- name: TouchConversationUpdated :exec
+-- Sidebar ordering (评测 §十三): conversations.updated_at must move when a
+-- message lands, otherwise an old conversation never returns to the top of
+-- the list. Called in the same transaction as the message insert.
+UPDATE conversations SET updated_at = CURRENT_TIMESTAMP(3) WHERE id = ?;

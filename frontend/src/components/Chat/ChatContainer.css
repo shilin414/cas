@@ -1,0 +1,60 @@
+/* ChatContainer — GraphFlow agent-specific styles.
+ * The shared chat surface (container / messages / empty state /
+ * composer layout) moved to chatSurface.css so the unified Run
+ * renderer owns it as well. */
+
+.agent-activity {
+  margin: -8px 0 14px 48px;
+  color: var(--color-text-dim);
+  font-size: 12px;
+}
+
+.agent-question-card {
+  margin: 4px 0 20px 48px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+  border-radius: var(--border-radius-lg);
+  background: color-mix(in srgb, var(--color-primary) 7%, var(--color-bg-card));
+}
+
+.agent-question-eyebrow {
+  margin-bottom: 6px;
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-question-title {
+  margin-bottom: 12px;
+  color: var(--color-text);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.agent-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.agent-question-option-description {
+  display: block;
+  color: var(--color-text-dim);
+  font-size: 12px;
+}
+
+.agent-question-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.agent-cancel-link {
+  border: 0;
+  background: transparent;
+  color: var(--color-error);
+  cursor: pointer;
+  font: inherit;
+}

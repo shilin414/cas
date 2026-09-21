@@ -1,0 +1,318 @@
+package integration
+
+// 第七轮复审整改验证 (P2-1).
+//
+// The sixth round moved studio_run_duration onto the DB clock, but left the
+// timestamp read INSIDE the finalize transaction and fatal:
+//
+//	CASFinishRunFenced
+//	→ GetRunForUpdate   ← observation only
+//	→ if err != nil { return err }   ← rolls the terminal transition back
+//
+// So a metrics read that cannot complete could leave a finished run
+// `running` with a live lease and no terminal event — the exact opposite of
+// the file header's own promise ("metrics are post-commit side effects,
+// never correctness"). 第七轮 P2-1 moves the read after the commit and makes
+// every failure a warning. These tests prove both halves on the real
+// database.
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"testing"
+	"time"
+
+	dto "github.com/prometheus/client_model/go"
+
+	"github.com/shilin414/cas/backend-go/internal/execution"
+	db "github.com/shilin414/cas/backend-go/internal/gen/db"
+	"github.com/shilin414/cas/backend-go/internal/platform/ids"
+)
+
+// ── P2-1: a failing metric read can never roll back terminalization ──
+
+func TestDurationMetricReadFailureDoesNotRollbackFinalize(t *testing.T) {
+	svc, _ := testEnv(t)
+	ctx := context.Background()
+	provider := "itest_metric_fail"
+
+	convID := seedConversation(t, svc)
+	runID := seedRunWithConversation(t, svc, provider, convID)
+	deleteConversationFixture(t, svc, convID)
+	deleteRunFixture(t, svc, runID)
+
+	claimed, _, err := svc.ClaimRun(ctx, runID, "metric-worker", time.Minute)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := svc.MarkRunStartedOwned(ctx, claimed.Ownership); err != nil {
+		t.Fatalf("mark started: %v", err)
+	}
+	// A live provider slot: finalize must clean it even when the metric
+	// read explodes (slot cleanup lives in the correctness transaction).
+	if err := svc.Querier().CreateProviderSlot(ctx, db.CreateProviderSlotParams{
+		Provider:    provider,
+		RunID:       runID.Bytes(),
+		LeaseEpoch:  claimed.Ownership.LeaseEpoch,
+		LeaseToken:  claimed.Ownership.LeaseToken.Bytes(),
+		WorkerID:    "metric-worker",
+		LeaseMicros: int64(time.Minute / time.Microsecond),
+	}); err != nil {
+		t.Fatalf("create provider slot: %v", err)
+	}
+
+	// The injected failure hits ONLY the duration observation.
+	injected := errors.New("injected duration read failure")
+	svc.RunDurationTimestamps = func(context.Context, ids.ID) (sql.NullTime, sql.NullTime, error) {
+		return sql.NullTime{}, sql.NullTime{}, injected
+	}
+
+	err = svc.FinalizeOwnedRun(ctx, claimed.Run, claimed.Ownership, &execution.FinishInput{
+		Status:            execution.StatusSucceeded,
+		Output:            map[string]any{"text": "answer"},
+		ProviderStatus:    "Completed",
+		AssistantText:     "answer",
+		AssistantMetadata: mustMeta(runID),
+	})
+	if err != nil {
+		t.Fatalf("finalize returned %v — a metrics read must never be able to fail "+
+			"terminalization (第七轮 P2-1)", err)
+	}
+
+	// Correctness is fully intact — the same invariants a clean finalize
+	// establishes, all from the one committed transaction.
+	run, err := svc.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != execution.StatusSucceeded {
+		t.Fatalf("run.status = %q, want %q: the metric read rolled the terminal "+
+			"transition back", run.Status, execution.StatusSucceeded)
+	}
+	if n := countEvents(t, svc, runID, execution.EventRunCompleted); n != 1 {
+		t.Fatalf("run.completed events = %d, want exactly 1", n)
+	}
+	if leaseExists(t, svc, runID) {
+		t.Fatal("terminal run kept its lease")
+	}
+	if n := countProviderSlots(t, svc, runID); n != 0 {
+		t.Fatalf("provider_execution_slots = %d, want 0 (slot cleanup is part of the "+
+			"correctness transaction)", n)
+	}
+	var assistantMessages int64
+	if err := svc.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM messages WHERE conversation_id = ? AND role = 'assistant'`,
+		convID).Scan(&assistantMessages); err != nil {
+		t.Fatal(err)
+	}
+	if assistantMessages != 1 {
+		t.Fatalf("assistant messages = %d, want 1", assistantMessages)
+	}
+
+	// The ONLY permitted casualty: the duration sample never happened.
+	if n := histogramSampleCount(t, svc, "studio_run_execution_seconds",
+		map[string]string{"provider": provider, "status": execution.StatusSucceeded}); n != 0 {
+		t.Fatalf("duration samples = %d, want 0: the failed read must be dropped, "+
+			"not replaced by a bogus sample", n)
+	}
+}
+
+// ── P2-1: the observation reads COMMITTED, DB-clock timestamps ──
+
+func TestDurationMetricUsesPersistedDBTimestamps(t *testing.T) {
+	svc, _ := testEnv(t)
+	ctx := context.Background()
+	provider := "itest_metric_db_clock"
+
+	convID := seedConversation(t, svc)
+	runID := seedRunWithConversation(t, svc, provider, convID)
+	deleteConversationFixture(t, svc, convID)
+	deleteRunFixture(t, svc, runID)
+
+	claimed, _, err := svc.ClaimRun(ctx, runID, "metric-worker", time.Minute)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := svc.MarkRunStartedOwned(ctx, claimed.Ownership); err != nil {
+		t.Fatalf("mark started: %v", err)
+	}
+
+	// The observer runs on its OWN connection, so whatever it reads is the
+	// state a concurrent reader sees. Reading `running` would prove the
+	// observation still happens inside the (uncommitted) finalize
+	// transaction — the 第六轮 shape this round removes.
+	var observedStatus string
+	var observedErr error
+	observed := 0
+	svc.RunDurationTimestamps = func(callCtx context.Context, id ids.ID) (sql.NullTime, sql.NullTime, error) {
+		observed++
+		if err := svc.DB.QueryRowContext(callCtx,
+			`SELECT status FROM runs WHERE id = ?`, id.Bytes()).Scan(&observedStatus); err != nil {
+			observedErr = err
+			return sql.NullTime{}, sql.NullTime{}, err
+		}
+		row, err := svc.Querier().GetRunTimestamps(callCtx, id.Bytes())
+		if err != nil {
+			observedErr = err
+			return sql.NullTime{}, sql.NullTime{}, err
+		}
+		if !row.StartedAt.Valid || !row.FinishedAt.Valid {
+			observedErr = errors.New("duration bounds are NULL after finalize")
+			return sql.NullTime{}, sql.NullTime{}, observedErr
+		}
+		return row.StartedAt, row.FinishedAt, nil
+	}
+
+	if err := svc.FinalizeOwnedRun(ctx, claimed.Run, claimed.Ownership, &execution.FinishInput{
+		Status:         execution.StatusSucceeded,
+		Output:         map[string]any{"text": "answer"},
+		ProviderStatus: "Completed",
+	}); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	if observed != 1 {
+		t.Fatalf("duration observation calls = %d, want 1", observed)
+	}
+	if observedErr != nil {
+		t.Fatalf("observation failed: %v", observedErr)
+	}
+	if observedStatus != execution.StatusSucceeded {
+		t.Fatalf("run.status seen by the observer = %q, want %q: the duration read "+
+			"happens BEFORE the commit (第七轮 P2-1)", observedStatus, execution.StatusSucceeded)
+	}
+	if n := histogramSampleCount(t, svc, "studio_run_execution_seconds",
+		map[string]string{"provider": provider, "status": execution.StatusSucceeded}); n != 1 {
+		t.Fatalf("duration samples = %d, want 1 (the DB-clock pair is observable)", n)
+	}
+}
+
+// ── CI 复盘: a renewal of a LIVE row must report 1 changed row ──
+//
+// CI failed the seventh-round push on
+//
+//	fencing_matrix_test.go:224: current owner slot renew:
+//	execution: provider inflight slot lost
+//
+// with a slot that existed and was owned. Root cause is MySQL's affected-rows
+// semantics, not the fixture: `UPDATE` reports CHANGED rows, not matched ones,
+// so a renewal that lands in the same millisecond as the write that created
+// the row computes byte-identical heartbeat_at/expires_at and reports 0 —
+// which Renew reads as "slot gone", and HeartbeatOwned as "ownership lost".
+// A localhost MySQL (CI) is fast enough to land in the same millisecond; a LAN
+// round trip (local dev) always crosses a millisecond boundary, which is why
+// 10 local runs of the same test never reproduced it.
+//
+// `SET timestamp` pins the SESSION clock, so this test reproduces the race
+// deterministically instead of hoping for a fast millisecond.
+func TestLiveRenewalReportsOneChangedRow(t *testing.T) {
+	testEnv(t) // env guard (STUDIO_TEST_DB) + shared fixture helpers
+	svc := newFrozenClockService(t)
+	ctx := context.Background()
+
+	runID := seedRun(t, svc, "itest_frozen_clock")
+	deleteRunFixture(t, svc, runID)
+	claimed, won, err := svc.ClaimRun(ctx, runID, "frozen-worker", time.Minute)
+	if err != nil || !won {
+		t.Fatalf("claim: won=%v err=%v", won, err)
+	}
+
+	// 1. Lease renewal. The lease was created at the pinned instant, so
+	//    HeartbeatOwned recomputes exactly the same timestamps.
+	ok, err := svc.HeartbeatOwned(ctx, claimed.Ownership, time.Minute)
+	if err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if !ok {
+		t.Fatal("HeartbeatOwned reported LOST OWNERSHIP for a live lease whose renewal " +
+			"landed in the same millisecond as its creation: a same-millisecond renewal " +
+			"must still count as one changed row")
+	}
+
+	// 2. Provider slot renewal — the statement CI actually failed on.
+	provider := "itest_frozen_clock_slot"
+	slots := execution.NewProviderSlots(svc.DB, provider, 4, time.Minute)
+	t.Cleanup(func() {
+		_, _ = svc.DB.ExecContext(context.Background(),
+			`DELETE FROM provider_execution_slots WHERE provider = ?`, provider)
+		_, _ = svc.DB.ExecContext(context.Background(),
+			`DELETE FROM provider_admission_locks WHERE provider = ?`, provider)
+	})
+	slot, admitted, _, err := slots.Acquire(ctx, claimed.Ownership)
+	if err != nil || !admitted {
+		t.Fatalf("slot acquire: admitted=%v err=%v", admitted, err)
+	}
+	if err := slots.Renew(ctx, slot); err != nil {
+		t.Fatalf("Renew reported %v for a live, owned slot: a same-millisecond renewal "+
+			"must not be mistaken for a lost slot", err)
+	}
+	// The idempotent re-acquire path touches the slot too, and its own
+	// affected-rows check has the same exposure.
+	if _, admitted, _, err := slots.Acquire(ctx, claimed.Ownership); err != nil || !admitted {
+		t.Fatalf("idempotent re-acquire: admitted=%v err=%v", admitted, err)
+	}
+}
+
+// newFrozenClockService opens a SECOND handle on the same database whose
+// session clock is pinned to the current second, so two consecutive renewal
+// statements compute identical CURRENT_TIMESTAMP(3) values.
+//
+// MySQL's `SET timestamp` is session-scoped, hence MaxOpenConns(1): every query
+// must go back to the one connection that carries the setting. The session
+// plumbing itself lives in newSessionTunedService (review8_fixes_test.go),
+// which the later rounds reuse for their own injected conditions.
+func newFrozenClockService(t *testing.T) *execution.Service {
+	t.Helper()
+	return newSessionTunedService(t, "SET timestamp = ?", time.Now().Unix())
+}
+
+// ── helpers ──
+
+func countProviderSlots(t *testing.T, svc *execution.Service, runID ids.ID) int64 {
+	t.Helper()
+	var n int64
+	if err := svc.DB.QueryRow(`SELECT COUNT(*) FROM provider_execution_slots WHERE run_id = ?`,
+		runID.Bytes()).Scan(&n); err != nil {
+		t.Fatalf("count provider slots: %v", err)
+	}
+	return n
+}
+
+// histogramSampleCount reads one label set's sample count straight off the
+// registry. prometheus/testutil is a separate Go module, and the whole
+// assertion is a gather + filter, so the dependency is not worth adding.
+func histogramSampleCount(t *testing.T, svc *execution.Service, name string, labels map[string]string) uint64 {
+	t.Helper()
+	if svc.Metrics == nil || svc.Metrics.Registry == nil {
+		t.Fatal("test env has no metrics registry")
+	}
+	families, err := svc.Metrics.Registry.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	for _, fam := range families {
+		if fam.GetName() != name {
+			continue
+		}
+		for _, m := range fam.GetMetric() {
+			if metricHasLabels(m.GetLabel(), labels) {
+				return m.GetHistogram().GetSampleCount()
+			}
+		}
+	}
+	return 0
+}
+
+func metricHasLabels(pairs []*dto.LabelPair, want map[string]string) bool {
+	got := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		got[p.GetName()] = p.GetValue()
+	}
+	for k, v := range want {
+		if got[k] != v {
+			return false
+		}
+	}
+	return true
+}

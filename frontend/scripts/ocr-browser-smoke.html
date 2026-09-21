@@ -1,0 +1,9 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Local OCR smoke harness</title><body><main id="root"></main><script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import '../src/styles/variables.css';
+const root=createRoot(document.querySelector('#root'));
+const manifest=await fetch(import.meta.env.BASE_URL+'ocr-assets/ppocrv6-tiny-20260921/manifest.json').then(r=>r.json());
+const model={id:'local-smoke',name:'Official PP-OCRv6 tiny',model_id:'PP-OCRv6_tiny',capability_kind:'ocr',execution_location:'browser_local',browser_manifest:manifest,capabilities:{image:true,video:false,pdf:false,streaming:false},default_parameters:{},enabled:true,version:1,created_at:'',updated_at:''};
+root.render(React.createElement('button',{onClick:async()=>{const {default:Panel}=await import('../src/features/ai-models/ocr/OcrTestPanel');root.render(React.createElement(React.Fragment,null,React.createElement('button',{'data-testid':'ocr-unmount',onClick:()=>root.render(React.createElement('p',null,'已离开 OCR 面板'))},'离开面板（仅测试页）'),React.createElement(Panel,{model})));}},'打开本地 OCR 测试'));
+</script></body></html>

@@ -1,0 +1,10 @@
+DELETE rp FROM admin_role_permissions rp JOIN admin_permissions p ON p.id=rp.permission_id WHERE p.code IN ('ai.model.read','ai.model.write','ai.connection.secret.write','ai.model.test','ai.model.log.read');
+DELETE FROM admin_permissions WHERE code IN ('ai.model.read','ai.model.write','ai.connection.secret.write','ai.model.test','ai.model.log.read');
+DROP TABLE ai_invocations;
+DROP TABLE IF EXISTS ai_object_deletions;
+DROP TABLE ai_test_attachments;
+DROP TABLE ai_test_messages;
+DROP TABLE ai_test_sessions;
+DROP TABLE ai_test_owners;
+DROP TABLE ai_models;
+DROP TABLE ai_connections;

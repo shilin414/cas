@@ -1,0 +1,17 @@
+.apps-page .product-page-surface__inner { display: flex; flex-direction: column; }
+.app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); align-items: stretch; gap: var(--space-4); }
+.app-card { display: flex; min-width: 0; min-height: 176px; flex-direction: column; padding: var(--space-6); border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-bg-card); color: var(--color-text); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard); }
+.app-card:hover { border-color: var(--color-border-hover); background: var(--color-bg-hover); box-shadow: var(--shadow-sm); transform: translateY(-1px); }
+.app-card:focus-visible { border-color: var(--color-border-focus); outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+.app-card__header { display: flex; min-width: 0; align-items: center; gap: var(--space-4); }
+.app-card__icon { border: 1px solid var(--color-border); background: var(--color-bg-elevated); box-shadow: var(--shadow-sm); }
+.app-card__title-wrap { display: flex; flex: 1; min-width: 0; align-items: center; }
+.app-card__name { display: -webkit-box; overflow: hidden; color: var(--color-text); font-family: var(--font-display); font-size: var(--font-size-card-title); line-height: var(--line-height-tight); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.app-card__arrow { flex: none; color: var(--color-text-dim); transition: color var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard); }
+.app-card:hover .app-card__arrow { color: var(--color-primary); transform: translateX(2px); }
+.app-card__description { display: -webkit-box; min-height: 42px; overflow: hidden; margin-top: var(--space-5); color: var(--color-text-sec); font-size: var(--font-size-body); line-height: 1.5; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.app-card__footer { display: flex; min-width: 0; align-items: flex-end; justify-content: space-between; gap: var(--space-3); margin-top: auto; padding-top: var(--space-5); }
+.app-card__availability { flex: none; color: var(--color-text-dim); font-size: var(--font-size-meta); }
+.apps-page__more { display: flex; justify-content: center; padding: var(--space-8) 0; }
+.apps-page__count { color: var(--color-text-dim); font-size: var(--font-size-meta); }
+@media (max-width: 768px) { .app-grid { grid-template-columns: 1fr; } .app-card { min-height: 164px; } }
