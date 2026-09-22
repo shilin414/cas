@@ -1,6 +1,0 @@
-"""
-Agents app for xiaoan-platform.
-
-This app handles AI agent management and operations.
-"""
-default_app_config = 'apps.agents.apps.AgentsConfig'

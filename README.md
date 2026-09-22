@@ -1,191 +1,83 @@
-# 小安工作助手 Workbench · 企业 AI 工作台
+# 小安工作助手
 
-小安工作助手 Workbench 是一个以 **Capability（智能体 / 应用）** 为入口、以 **Task（任务）** 组织用户工作、以统一 **Run（执行）** 协议驱动后端、以 **Artifact（成果）** 承载输出的企业 AI 工作台。当前 Task 由 Conversation 作为技术承载容器，前端只通过 Task Facade 使用任务语义；主链路由 React 前端、Go 控制面/流式面/执行面、MySQL 5.7、Redis 和飞书 Aily 自定义智能体组成。
+企业 AI 工作台：以智能体/应用作为能力入口，以任务组织对话，以 Run 驱动执行并输出成果。当前运行代码是 **Go 后端 + React 前端**，不是 Django 项目。
 
-## 当前状态
+> 文档核对日期：2026-09-21。以当前仓库源码、迁移和锁文件为准；历史整改报告不作为部署依据。此次部署模板尚未在目标 Docker/Kubernetes 环境完成上线验收。
 
-- **Go 后端**：[backend-go/](backend-go/)；G0–G10 已完成，Django 已退出运行架构。
-- **前端**：[frontend/](frontend/)；React 18 + TypeScript + Vite + Ant Design + Zustand。
-- **HTTP 契约**：[backend-go/api/openapi.yaml](backend-go/api/openapi.yaml) 是唯一 API Contract。
-- **数据库**：MySQL 5.7 是唯一 Source of Truth（TiDB 8.0.0 / TiProxy 已退出运行架构）。
-- **Redis**：仅用于 Opaque Session、UAT 缓存、GCRA 限流、Redis Streams 分发和 Run Pub/Sub。
-- **认证**：HttpOnly Opaque Session Cookie + CSRF double-submit；前端不保存 JWT。
-- **Provider**：当前已完成飞书 Aily Agent；Aily Workflow、Codex、GraphFlow、HTTP Adapter 属后续 G12。
+## 当前技术与功能
 
-## 对话与分享排查
+- Go **1.27**（`backend-go/go.mod`）；React 18、TypeScript、Vite 7、Ant Design、Zustand（精确依赖以 npm 锁文件为准）。
+- MySQL **5.7** 为持久化基线；仓库最新迁移为 **0044**。Redis 支持 standalone / Cluster；Worker 对 Redis 5 使用 `XPENDING + XCLAIM` 回退。
+- 认证为飞书 OAuth + 服务端 Session Cookie + CSRF；本地口令登录仅用于已有管理员账号，不依赖浏览器 JWT。
+- 已有能力：任务工作台、飞书 Aily Agent、自动化计划及飞书投递、分享、企业目录同步、管理 RBAC/资源 ACL、业务应用、AI 模型管理/测试台与浏览器 OCR。
+- **AI 测试台不等于已接入正式 Run 执行链**。协作流程设计、更多 Provider 不在当前已交付清单中；界面中有入口也不代表后端执行器已注册。
+- API 路由查 `backend-go/api/openapi.yaml` **以及** `internal/transport/http` 的手工注册路由，不能只看 OpenAPI 文件。
 
-- [Aily 执行过程与最终回复：边界和排查](docs/aily-response-boundaries.md)
-- [飞书分享卡片：表格、智能体和降级](docs/feishu-share-cards.md)
+## 六个常驻服务
 
-权威设计与进度文档：
+| 服务 | 入口 / 端口 | 用途 |
+| --- | --- | --- |
+| API | `cmd/api` / 8080 | REST、认证、管理；开发代理也可走此 SSE 入口 |
+| Stream | `cmd/stream` / 8081 | 独立 SSE 长连接 |
+| 执行 Worker | `cmd/worker --provider=feishu_aily` | 执行 Run、Outbox Relay、回收 |
+| 投递 Worker | `cmd/worker --provider=feishu_delivery` | 向飞书投递成果 |
+| Scheduler | `cmd/scheduler` | 自动化与企业同步调度 |
+| 前端 | 开发 Vite 3030；生产 Nginx | SPA、静态 OCR 资源、同源反向代理 |
 
-- [Go 后端目标架构](docs/Creation%20Agent%20Studio%20Go%20后端目标架构.md)
-- [Go 重构执行计划](docs/Creation%20Agent%20Studio%20Go%20重构执行计划.md)
-- [Go 重构交接提示词](docs/Go重构交接提示词.md)
-- [开发进度清单](docs/开发进度清单.md)
-- [AI 模型管理开发设计](docs/AI模型管理与测试台开发设计.md)
-- [AI 模型管理实现、部署与验证](docs/ai-models-implementation.md)
-- [浏览器 OCR 资源与部署说明](docs/ocr-browser-deployment.md)
-- [GLM-4.6V-FlashX 与内置 OCR 最简配置](docs/glm-flashx-and-ocr-setup.md)
-- [开发、测试与生产环境配置切换](docs/environment-profiles.md)
-- [Django 历史参考归档](docs/archive/django-reference/README.md)
+迁移工具 `cmd/migrate` **不是常驻服务**。部署模板不运行 `-migrate`、数据库 InitContainer、Job 或 CI 生产迁移。
 
+## 从这里开始
 
-## Workbench V2 产品模型
+| 需求 | 文档 |
+| --- | --- |
+| 本地启动与验证 | [本地开发](docs/local-development.md) |
+| dev / test / prod 配置 | [环境配置](docs/environment-profiles.md) |
+| 架构与实现边界 | [当前架构](docs/architecture.md) |
+| CentOS 7.9 / 运行环境限制 | [平台前置检查](docs/deployment/platform-prerequisites.md) |
+| Docker 部署与升级 | [Docker 操作手册](docs/deployment/docker.md) |
+| Kubernetes 1.34.1 / Kustomize 5.7.1 | [Kubernetes 操作手册](docs/deployment/kubernetes.md) |
+| 人工建库、SQL 变更与管理员初始化 | [数据库操作手册](docs/deployment/database.md) |
+| 健康检查、验收与回滚 | [运维手册](docs/operations.md) |
+| 完整目录 / 清理说明 | [文档索引](docs/README.md) |
+
+### 本机启动摘要
+
+从 `backend-go` 目录为每个进程设置 `STUDIO_ENV=dev`，使用 `.env.development.local`；测试和生产分别使用 `.env.test.local`、`.env.production.local`。本机不再使用通用 `.env.local`，但加载器仍保留旧文件的回退逻辑，详见环境文档。
+
+```powershell
+# 在 backend-go 目录，先构建；各角色分别运行，不能只开 API。
+$env:STUDIO_ENV = 'dev'
+go build -o bin/api.exe ./cmd/api
+go build -o bin/stream.exe ./cmd/stream
+go build -o bin/worker.exe ./cmd/worker
+go build -o bin/scheduler.exe ./cmd/scheduler
+# 在独立终端分别执行：
+.\bin\api.exe
+.\bin\stream.exe
+.\bin\worker.exe --provider=feishu_aily
+.\bin\worker.exe --provider=feishu_delivery
+.\bin\scheduler.exe
+```
+
+在 `frontend` 目录执行 `npm ci`、`npm run dev -- --port 3030 --strictPort`。
+访问 `http://localhost:3030/xiaoan-platform/`，管理员入口为 `/xiaoan-platform/login/admin`。
+
+## 目录
 
 ```text
-Capability（能力：智能体 / 应用）
-          │
-          ▼
-Task（任务；当前由 Conversation 承载）
-          │
-          ▼
-Run（一次真实执行） ──────► Artifact（成果）
-
-Automation（自动化）按计划触发新的执行或任务活动
+backend-go/            Go 服务、SQL 迁移、测试
+frontend/              SPA、OCR 资源准备、Nginx 配置生成器
+deployment.json        公共基础路径
+deploy/docker/         后端镜像、Compose、TLS Nginx 模板
+deploy/k8s/            Kubernetes/Kustomize 模板
+deploy/backend.env.example  无秘密的生产配置模板
+docs/                  当前维护的操作与功能文档
 ```
 
-- **任务 API**：`GET /api/v2/tasks` 使用 `(updated_at, id)` 游标分页，`PATCH /api/v2/tasks/{id}` 重命名，`DELETE /api/v2/tasks/{id}` 复用 Conversation 安全级联删除。
-- **兼容策略**：保留 `/api/conversations/` 等 legacy/internal API，现有 Chat、Share、Deep Link、SSE 与 Run CAS 不迁移数据模型。
-- **数据库**：不新增 `tasks` 表，只增加任务列表索引；只有出现一任务多会话、任务负责人/生命周期/权限等聚合需求时才引入真正的 Task Aggregate。
-- **启动数据**：`/api/v2/workspace/bootstrap` 继续保持常量级 Payload，并新增混排的 `recent_capabilities` 与精简的 `recent_tasks`。
-- **PC 工作台**：无全局 Header；固定左侧导航、最近使用、最近任务，中间 Main Workspace，右侧按需 Inspector。
-- **Mobile 工作台**：顶部能力切换、统一 Drawer、最近使用、最近任务与移动任务中心；PC/Mobile 共用业务层但使用独立布局层。
-- **Composer**：普通 `@` 文本直接作为任务内容发送；能力切换只通过显式 Capability Picker 完成。
+## 安全与发布约束
 
-## 运行架构
-
-```text
-React/Vite :3030
-      │ /api
-      ▼
-studio-api :8080 ─────────────── MySQL 5.7
-      │                           Source of Truth
-      ├── REST + 当前开发环境 SSE
-      │
-      └── Outbox ── Redis Streams ── studio-worker ── Feishu Aily
-                     Redis Pub/Sub
-
-生产目标：REST → studio-api，SSE → studio-stream :8081（G15 部署拓扑）。
-```
-
-Run 的正确性边界：
-
-1. API 在一个 MySQL 事务内写入 Message、Run 和 Outbox。
-2. Outbox Relay 以 at-least-once 语义发布到 Redis Streams。
-3. Worker 只有 CAS Claim 成功时才能执行；RunLease、Heartbeat、Reaper 负责恢复。
-4. Aily 实时 delta 走 Redis Pub/Sub；Final Reconciliation 的 GET chat result 是终态唯一权威。
-5. 最终 Message、Run、Artifact 持久化到 MySQL；Redis 从不作为业务真相。
-
-## 项目结构
-
-```text
-xiaoan-platform/
-├── backend-go/
-│   ├── cmd/api/                 # REST 控制面；开发环境也挂载 SSE
-│   ├── cmd/stream/              # 可独立扩容的 SSE Gateway
-│   ├── cmd/worker/              # Outbox Relay + Provider Worker
-│   ├── cmd/testsession/         # 本地 E2E 会话签发工具
-│   ├── api/openapi.yaml         # 唯一 HTTP Contract
-│   ├── db/migrations/           # golang-migrate；MySQL 5.7 兼容
-│   ├── db/queries/              # sqlc 显式 SQL
-│   ├── internal/                # identity/catalog/execution/integrations/platform/transport
-│   └── tests/                   # MySQL/Redis 集成测试 + 真实 Aily 浏览器 E2E
-├── frontend/                    # React + TypeScript + Vite；workbench/ 为 V2 Shell/能力/任务/Inspector
-└── docs/
-    └── archive/django-reference # 只读历史行为参考，不参与运行
-```
-
-## 本地启动
-
-### 前置要求
-
-- Go 1.27.x
-- Node.js 与 npm
-- 可访问已配置的 MySQL 5.7（:3306 或实例端口）、Redis 和飞书/Aily 环境
-- 真实凭据仅放在 gitignored 的 `backend-go/.env.*.local` 环境配置文件
-- Go 模块代理不可达时使用 `GOPROXY=https://goproxy.cn,direct`
-
-### 启动三个进程
-
-```bash
-# 终端 1：API（默认 dev；测试/生产设置 STUDIO_ENV=test|prod）
-cd backend-go
-go run ./cmd/api
-
-# 终端 2：执行面
-cd backend-go
-go run ./cmd/worker
-
-# 终端 3：前端
-cd frontend
-npm ci
-npx vite --port 3030 --strictPort
-```
-
-访问 `http://localhost:3030/xiaoan-platform/`。部署前缀统一配置于根目录 `deployment.json`，可改为其他子路径或 `/`；修改后需重启开发服务或重新构建并部署。完整说明见 [可配置部署路径](docs/deployment-subpath.md)。本机 Vite 可能只监听 `localhost/::1`，不要把浏览器地址替换成 `127.0.0.1`。
-
-如需独立 SSE 进程：
-
-```bash
-cd backend-go
-go run ./cmd/stream
-```
-
-## 常用开发命令
-
-```bash
-# Go 生成物（修改 OpenAPI 或 SQL 后）
-cd backend-go
-make gen-api
-make gen-db
-
-# Go 静态与单元测试
-go build ./...
-go vet ./...
-go test ./... -count=1
-
-# 真实 MySQL 5.7 + Redis 集成测试
-STUDIO_TEST_DB=1 STUDIO_TEST_REDIS=1 \
-  go test ./tests/integration/ -count=1
-
-# 前端
-cd ../frontend
-npx tsc --noEmit
-npx vitest run
-```
-
-## 集成测试隔离要求
-
-真实集成测试只能使用独立的本机/CI MySQL 与 Redis 实例，不能复用应用正在使用的 Redis 逻辑库。`STUDIO_TEST_ISOLATED=1` 是明确确认，测试入口还会检查目标为 loopback；只改 key prefix 不构成隔离。集成目录禁止整库清理命令，队列丢失测试仅删除该用例创建的明确 stream 键。CI 的该确认仅用于本次 job 自建服务容器。
-
-## 真实 Aily 浏览器 E2E
-
-E2E 需要 API、Worker、Vite 三个进程，并使用已经迁入 `xiaoan`（MySQL 5.7）的真实用户、Application、RuntimeBinding 和 UAT 身份数据。
-
-```bash
-python -m pip install -r backend-go/tests/requirements-e2e.txt
-C:/software/miniconda3/envs/py311/python.exe backend-go/tests/e2e_go_chat.py
-```
-
-该脚本通过 `cmd/testsession` 签发 Go Opaque Session，不依赖 Django、`manage.py`、JWT 或 8000 端口。
-
-## 不得回归的架构红线
-
-- Domain 不依赖 chi、Redis driver 或 MySQL driver。
-- Provider 差异只进入 RuntimeAdapter；业务层禁止散落 `if provider == ...`。
-- Redis 只是分发、实时、缓存与会话，不是 Source of Truth。
-- Worker 必须 CAS Claim；Redis 重复消息不得造成重复执行。
-- SSE 断开不等于 Run 失败；终态必须由 Final Reconciliation 收敛。
-- Aily 自定义智能体使用用户 UAT；Studio Session 与 Provider 凭据彻底分离。
-- Refresh Token 只能 AES-256-GCM 加密落库；secret 不进源码、测试或日志。
-- SQL 使用显式列并保持 MySQL 5.7 兼容。
-- `runtime_bindings.external_resource_id` 才是 Agent ID 配置来源，不得写死。
-
-## 已知的计划内缺口
-
-- Workspace 模板工作区及旧 GraphFlow 链路将在 G12 迁入统一 Application → RuntimeBinding → Run 模型。
-- 企业控制台、组织、API Key、Quota、Audit、Provider Health 属 G13；相关 legacy 页面目前可能返回 404。
-- 完整容器、Nginx、资源限制与生产发布拓扑属 G15。
-
-不要恢复 Django 作为临时备用后端。历史实现只保存在 `docs/archive/django-reference/` 中，用于查证已验证行为。
+- 真实 `.env.*.local`、密码、证书、导出的 Secret 不提交 Git、不打进镜像、不输出到 CI 日志。
+- dev/test 当前按约定共用数据库和 Redis；**不是隔离测试环境**，不得直接跑破坏性集成测试。
+- 更换 Redis 不会搬迁 Session/缓存/队列；更换数据库必须同时考虑加密密钥与文件存储，不能只改连接地址。
+- 生产 Cookie 为 Secure，正式入口必须 HTTPS。上传内容需要共享持久化存储或 S3，不能留在 Pod 临时文件系统。
+- 现有 Actions 的 push 分支是 `dev/main/exam`，并不包含 `test`；CI 内的临时测试库初始化不等同生产迁移。本次不改变 CI。

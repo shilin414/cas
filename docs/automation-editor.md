@@ -1,8 +1,10 @@
 # 自动化编辑器与推送条件
 
+当前运行需要 Scheduler、执行 Worker、投递 Worker；数据库变更人工执行，见[数据库手册](deployment/database.md)。
+
 ## 产品范围
 
-自动化沿用现有 Schedule → Occurrence → Run → DeliveryExecution 链路；“自动化”是用户界面的统一名称，不改变既有 `/v2/schedules` 接口和路由。
+自动化沿用现有 Schedule → Occurrence → Run → DeliveryExecution 链路；“自动化”是用户界面的统一名称，不改变既有 `/api/v2/schedules` 接口和路由。
 
 - PC：双栏编辑器，左侧标题、任务描述与执行智能体，右侧触发器、高级配置与推送配置，底部固定操作。
 - 移动端：创建主页面、触发配置页面、推送配置页面；指定开始/结束时间在底部面板编辑，确认后回填。

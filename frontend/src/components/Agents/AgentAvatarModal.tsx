@@ -29,9 +29,11 @@ interface AgentAvatarModalProps {
   open: boolean;
   onClose: () => void;
   onSaved: (agent: ManagedAgent) => void | Promise<void>;
+  /** New agents stage the file locally until the parent creates the application. */
+  onSelected?: (file: File) => void;
 }
 
-const AgentAvatarModal = ({ agent, open, onClose, onSaved }: AgentAvatarModalProps) => {
+const AgentAvatarModal = ({ agent, open, onClose, onSaved, onSelected }: AgentAvatarModalProps) => {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string>('');
   const [saving, setSaving] = useState(false);
@@ -64,7 +66,7 @@ const AgentAvatarModal = ({ agent, open, onClose, onSaved }: AgentAvatarModalPro
         return false;
       }
     } catch (error: any) {
-      message.error(error?.message || '清除头像失败');
+      message.error(error?.message || '图片无法读取，请重新选择');
       return false;
     }
     if (preview) URL.revokeObjectURL(preview);
@@ -74,12 +76,17 @@ const AgentAvatarModal = ({ agent, open, onClose, onSaved }: AgentAvatarModalPro
   };
 
   const handleSave = async () => {
-    if (!agent || !file) return;
+    if (!file) return;
+    if (onSelected) {
+      onSelected(file);
+      onClose();
+      return;
+    }
+    if (!agent) return;
     setSaving(true);
     try {
       const updated = await uploadAgentAvatar(agent.id, file);
       await onSaved(updated);
-      message.success('已恢复为默认图标');
       message.success('头像已更新');
       onClose();
     } catch (error: any) {
@@ -99,6 +106,7 @@ const AgentAvatarModal = ({ agent, open, onClose, onSaved }: AgentAvatarModalPro
     try {
       const updated = await clearAgentAvatar(agent.id);
       await onSaved(updated);
+      message.success('已恢复为默认图标');
       onClose();
     } catch {
       message.error('清除头像失败');

@@ -1,0 +1,23 @@
+# 共享文件存储 PVC。**不由 kustomization 管理**（避免应用升级动到数据生命周期）。
+#
+# 选用 nacos3-nfs-storage（集群里唯一带 provisioner、可自动供给的 StorageClass）。
+# 另外两个 test-data-agent-* 是 no-provisioner，必须手工先建 PV 才能绑，不适用。
+#
+# 为什么必须 ReadWriteMany：
+#   5 个后端角色（api/stream/2×worker/scheduler）都要读写同一份用户附件。
+#   用 RWO 的话多副本可能被调度到不同节点，出现 Multi-Attach 错误或各写各的孤儿文件。
+#
+# 应用：
+#   kubectl apply -f storage.yaml
+#   kubectl -n eboat-ai-ns get pvc xiaoan-storage   # 必须 Bound
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xiaoan-storage
+  namespace: eboat-ai-ns
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: nacos3-nfs-storage
+  resources:
+    requests:
+      storage: 20Gi

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   beforeUpload: null as null | ((file: File) => boolean | Promise<boolean>),
   upload: vi.fn(),
   clear: vi.fn(),
+  success: vi.fn(),
   createObjectURL: vi.fn(),
   revokeObjectURL: vi.fn(),
 }));
@@ -14,8 +15,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('antd', () => ({
   Avatar: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Button: ({ children }: { children?: React.ReactNode }) => <button type="button">{children}</button>,
-  Modal: ({ open, children }: { open?: boolean; children?: React.ReactNode }) => (
-    open ? <div data-testid="avatar-modal">{children}</div> : null
+  Modal: ({ open, children, onOk }: { open?: boolean; children?: React.ReactNode; onOk: () => void }) => (
+    open ? <div data-testid="avatar-modal">{children}<button onClick={onOk}>保存</button></div> : null
   ),
   Upload: ({ beforeUpload, children }: {
     beforeUpload: (file: File) => boolean | Promise<boolean>; children?: React.ReactNode;
@@ -23,7 +24,7 @@ vi.mock('antd', () => ({
     mocks.beforeUpload = beforeUpload;
     return <div>{children}</div>;
   },
-  message: { success: vi.fn(), error: vi.fn() },
+  message: { success: mocks.success, error: vi.fn() },
 }));
 
 vi.mock('@ant-design/icons', () => ({
@@ -72,6 +73,8 @@ async function render(open: boolean) {
 
 beforeEach(() => {
   mocks.beforeUpload = null;
+  mocks.success.mockReset();
+  mocks.upload.mockReset().mockResolvedValue({ ...agent, avatar_url: "/api/avatar?v=new" });
   mocks.createObjectURL.mockReset().mockReturnValue('blob:avatar-preview');
   mocks.revokeObjectURL.mockReset();
   Object.defineProperty(URL, 'createObjectURL', { value: mocks.createObjectURL, configurable: true });
@@ -106,3 +109,13 @@ describe('AgentAvatarModal preview lifecycle', () => {
     expect(mocks.revokeObjectURL).toHaveBeenCalledWith('blob:avatar-preview');
   });
 });
+
+ it('does not claim a successful upload restored the default icon', async () => {
+   await render(true);
+   await act(async () => { await mocks.beforeUpload?.(new File(['avatar'], 'avatar.png', {type:'image/png'})); });
+   await act(async () => { Array.from(document.querySelectorAll('button')).find(b => b.textContent === '保存')!.click(); });
+   expect(mocks.upload).toHaveBeenCalledTimes(1);
+   expect(mocks.clear).not.toHaveBeenCalled();
+   expect(mocks.success).toHaveBeenCalledWith('头像已更新');
+   expect(mocks.success).not.toHaveBeenCalledWith('已恢复为默认图标');
+ });

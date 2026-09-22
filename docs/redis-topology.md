@@ -1,57 +1,46 @@
-# Redis deployment modes
+# Redis 拓扑与版本兼容
 
-The Go backend selects the Redis topology explicitly with `REDIS_MODE`.
-Application services use one topology-neutral client, so API, stream, worker,
-and scheduler processes share the same configuration in both modes.
+后端通过 `internal/platform/redisx` 统一客户端，所有角色读取同一套配置。
 
-## Development and test: standalone
+## 单机
 
 ```dotenv
 REDIS_MODE=standalone
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_DATABASE=0
-REDIS_PASSWORD=replace-me
+REDIS_HOST=192.168.211.26
+REDIS_PORT=6381
+REDIS_DATABASE=2
+REDIS_PASSWORD=REPLACE_SECRET
+REDIS_KEY_PREFIX=xiaoan3
 ```
 
-`REDIS_DB` remains accepted as a backward-compatible fallback, but new
-deployments should use `REDIS_DATABASE`.
+旧名 `REDIS_DB` 仍可用，`REDIS_DATABASE` 优先。不要混用互相冲突的两者。
 
-## Production: cluster
+## Cluster
 
 ```dotenv
 REDIS_MODE=cluster
 REDIS_DATABASE=0
-REDIS_PASSWORD=replace-me
-REDIS_CLUSTER_NODES=redis-1.example:6379,redis-2.example:6379,redis-3.example:6379
+REDIS_CLUSTER_NODES=192.168.212.165:6381,192.168.212.165:6382,192.168.212.165:6383
 REDIS_CLUSTER_MAX_REDIRECTS=3
+REDIS_PASSWORD=REPLACE_SECRET
+REDIS_KEY_PREFIX=xiaoan-prod
 ```
 
-Redis Cluster does not support logical databases other than database 0. The
-backend rejects cluster configuration with a non-zero database or an empty node
-list at startup instead of failing later during queue or session operations.
+Cluster 配置拒绝非 0 DB、空节点列表和非法 host:port。当前封装不暴露 Sentinel、Redis ACL username 或 Redis TLS 配置。
+连接池 `REDIS_POOL_SIZE` 是每节点参数，部署多个 API/Worker 后应计算总连接数。
 
-## Connection settings
+## Redis 5 回收
 
-```dotenv
-REDIS_CONNECT_TIMEOUT=10s
-REDIS_TIMEOUT=5s
-REDIS_POOL_TIMEOUT=3s
-REDIS_POOL_SIZE=20
-REDIS_MIN_IDLE_CONNS=5
-REDIS_MAX_IDLE_CONNS=10
-REDIS_KEY_PREFIX=xiaoan3
-```
+- Worker 先使用 `XAUTOCLAIM`；遇到该命令不支持后，当前 Worker 进程切换 `XPENDING + XCLAIM`。
+- 不使用 Redis 6.2 的 XPENDING IDLE/排他范围语法；本地检查 idle，XCLAIM 再检查 min-idle。
+- 一次操作一个 Stream Key；Token 缓存和刷新锁使用相同 hash tag，避免多 Key Lua 的跨槽问题。
+- 回退不能解释成“任何 Redis 5 集群都已完整验收”。仍须在目标网络验证认证、被发现节点可达、实际消息回收、故障恢复和权限。
 
-In cluster mode, go-redis applies the pool size per cluster node. Keep the same
-key prefix across all backend processes in one environment. Credentials belong
-in the deployment secret store or ignored `.env.*.local` profile files, never in tracked files.
+2026-09-21 本地记录：开发入口为 5.0.9；生产三个入口只读探测为 5.0.14、cluster_state=ok、known_nodes=6，且支持 XPENDING/XCLAIM。该记录不是实时状态，也不代表生产全链路或故障转移验收通过。
 
-## Redis version compatibility
+## 网络与数据迁移
 
-Redis 5.0 and newer are supported. Workers prefer `XAUTOCLAIM` on Redis
-6.2+, and automatically fall back once per process to the Redis 5-compatible
-`XPENDING` + `XCLAIM` recovery sequence when that command is unavailable.
-The fallback does not use the `XPENDING IDLE` option because that option also
-requires Redis 6.2; it filters the idle time returned by the Redis 5 extended
-`XPENDING` response and lets `XCLAIM` recheck the minimum idle time atomically.
+Redis Cluster 的 seed 可达不等于全集群可达：客户端会跟随拓扑中的主节点/副本地址。容器到所有 advertised client ports 都需连通；集群内部 bus 端口由 Redis 运维管理，不必向应用开放。
+
+切换 Redis 地址/前缀不会自动搬 Session、缓存或 Stream，用户可能需要重新登录。先暂停调度和消费、核对 Outbox/Pending、规划业务恢复后再切换，不要把旧队列直接丢弃当完成迁移。
+禁止对共享环境执行 `FLUSHDB` / `FLUSHALL`。监控 evictions、队列 Pending、Outbox backlog、回退日志和业务终态；Ping 正常不是队列健康证明。

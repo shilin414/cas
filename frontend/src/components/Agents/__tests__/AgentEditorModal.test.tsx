@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   createAgentApplication: vi.fn(),
+  uploadAgentAvatar: vi.fn(),
   fetchAgentRuntimes: vi.fn(),
   fetchApplicationDetail: vi.fn(),
   updateAgentApplication: vi.fn(),
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     } | null;
     open: boolean;
     onClose: () => void;
+    onSelected?: (file: File) => void;
     onSaved: (agent: any) => void | Promise<void>;
   },
 }));
@@ -33,6 +35,7 @@ vi.mock("@/services/api", () => ({
 
 vi.mock("@/services/runApi", () => ({
   createAgentApplication: mocks.createAgentApplication,
+  uploadAgentAvatar: mocks.uploadAgentAvatar,
   fetchAgentRuntimes: mocks.fetchAgentRuntimes,
   fetchApplicationDetail: mocks.fetchApplicationDetail,
   updateAgentApplication: mocks.updateAgentApplication,
@@ -175,7 +178,10 @@ beforeEach(() => {
   });
   mocks.fetchAgentRuntimes.mockReset().mockResolvedValue([runtime]);
   mocks.fetchApplicationDetail.mockReset().mockResolvedValue(detail);
-  mocks.createAgentApplication.mockReset();
+  mocks.createAgentApplication.mockReset().mockResolvedValue(detail);
+  mocks.uploadAgentAvatar.mockReset().mockResolvedValue({...detail,avatar_url:"/api/avatar?v=new"});
+  Object.defineProperty(URL,"createObjectURL",{value:vi.fn().mockReturnValue("blob:draft-avatar"),configurable:true});
+  Object.defineProperty(URL,"revokeObjectURL",{value:vi.fn(),configurable:true});
   mocks.updateAgentApplication.mockReset().mockResolvedValue(detail);
   mocks.validateAgentRuntime.mockReset();
   mocks.avatarProps = null;
@@ -255,4 +261,49 @@ describe("AgentEditorModal avatar ownership", () => {
 
     expect(document.body.textContent).not.toContain("本地创作智能体");
   });
+});
+
+it('offers an avatar before the agent is created', async () => {
+  await mountEditor({ agentId: null });
+  expect(document.body.textContent).toContain('选择头像');
+});
+
+async function prepareNewAgentWithAvatar() {
+  const result = await mountEditor({agentId:null});
+  for (const [id,value] of Object.entries({name:'新助手',slug:'new-assistant',description:'用于测试',external_resource_id:'agent_test'})) {
+    const element = document.querySelector(`#${id}`) as HTMLInputElement | HTMLTextAreaElement;
+    expect(element).toBeTruthy();
+    await act(async()=>{
+      const prototype = element.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(prototype,'value')!.set!.call(element,value);
+      element.dispatchEvent(new Event('input',{bubbles:true}));
+    });
+  }
+  const file = new File(['avatar'],'avatar.png',{type:'image/png'});
+  await act(async()=>{ mocks.avatarProps?.onSelected?.(file); });
+  return {...result,file};
+}
+async function saveNewAgent() {
+  await click(Array.from(document.querySelectorAll('button')).find(b=>b.textContent?.replace(/\s/g,'')==='创建')!);
+  await flush(40);
+}
+it('uploads the staged avatar only after creation and returns the uploaded entity', async()=>{
+  const {onSaved,file}=await prepareNewAgentWithAvatar();
+  expect(mocks.uploadAgentAvatar).not.toHaveBeenCalled();
+  await saveNewAgent();
+  expect(mocks.createAgentApplication).toHaveBeenCalledTimes(1);
+  expect(mocks.uploadAgentAvatar).toHaveBeenCalledWith(7,file);
+  expect(onSaved).toHaveBeenLastCalledWith(expect.objectContaining({avatar_url:'/api/avatar?v=new'}));
+});
+it('retries a failed avatar upload without creating a duplicate agent', async()=>{
+  mocks.uploadAgentAvatar.mockRejectedValueOnce(new Error('upload unavailable'));
+  const {file}=await prepareNewAgentWithAvatar();
+  // prepareNewAgentWithAvatar does not reset the test's upload failure.
+  await saveNewAgent();
+  expect(mocks.createAgentApplication).toHaveBeenCalledTimes(1);
+  await saveNewAgent();
+  expect(mocks.createAgentApplication).toHaveBeenCalledTimes(1);
+  expect(mocks.updateAgentApplication).toHaveBeenCalledTimes(1);
+  expect(mocks.uploadAgentAvatar).toHaveBeenCalledTimes(2);
+  expect(mocks.uploadAgentAvatar).toHaveBeenLastCalledWith(7,file);
 });

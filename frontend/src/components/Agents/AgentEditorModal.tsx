@@ -24,6 +24,7 @@ import {
   fetchAgentRuntimes,
   fetchApplicationDetail,
   updateAgentApplication,
+  uploadAgentAvatar,
   validateAgentRuntime,
   type AgentRuntimeDescriptor,
   type AgentSkillInput,
@@ -125,7 +126,19 @@ const AgentEditorModal = ({
   const [managedAgent, setManagedAgent] = useState<RuntimeAgentDetail | null>(null);
   const [avatarOpen, setAvatarOpen] = useState(false);
 
+  const [pendingAvatar, setPendingAvatar] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState('');
+  useEffect(() => {
+    if (!pendingAvatar) { setAvatarPreview(''); return; }
+    const url = URL.createObjectURL(pendingAvatar);
+    setAvatarPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [pendingAvatar]);
+
   const isEdit = Boolean(agentId);
+  const savedAgentId = agentId ?? managedAgent?.id;
+  const draftName = Form.useWatch('name', form);
+  const draftIcon = Form.useWatch('icon', form);
   const runtimeKey = Form.useWatch('runtime_key', form);
   const selectedRuntime = useMemo(
     () => runtimes.find((item) => item.key === runtimeKey),
@@ -135,9 +148,11 @@ const AgentEditorModal = ({
   useEffect(() => {
     if (!open) {
       setAvatarOpen(false);
+      setPendingAvatar(null);
       setManagedAgent(null);
       return;
     }
+    setPendingAvatar(null);
     let cancelled = false;
     setLoading(true);
     setValidation(null);
@@ -269,7 +284,7 @@ const AgentEditorModal = ({
 
   const saveRuntimeAgent = async (values: AgentFormValues): Promise<ManagedAgent | null> => {
     const descriptor = runtimes.find((item) => item.key === values.runtime_key);
-    if (!descriptor && !isEdit) {
+    if (!descriptor && !savedAgentId) {
       message.error('请选择智能体运行时');
       return null;
     }
@@ -283,8 +298,8 @@ const AgentEditorModal = ({
         || descriptor.execution_modes[0] || 'interactive',
     } : undefined;
     const skills = collectSkills(values);
-    if (isEdit && agentId) {
-      const updated = await updateAgentApplication(agentId, {
+    if (savedAgentId) {
+      const updated = await updateAgentApplication(savedAgentId, {
         name: values.name,
         description: values.description || '',
         icon: values.icon || '',
@@ -347,9 +362,21 @@ const AgentEditorModal = ({
       const values = form.getFieldsValue(true) as AgentFormValues;
       setSaving(true);
       if (agentType === 'runtime') {
-        const updated = await saveRuntimeAgent(values);
+        let updated = await saveRuntimeAgent(values);
         if (!updated) return;
         setManagedAgent(updated);
+        if (pendingAvatar) {
+          try {
+            updated = await uploadAgentAvatar(updated.id, pendingAvatar);
+          } catch (error) {
+            // Keep the created id and draft so retry updates instead of creating duplicates.
+            await onSaved(updated);
+            message.error('智能体已保存，但头像上传失败。请重新保存以重试头像上传。');
+            return;
+          }
+          setManagedAgent(updated);
+          setPendingAvatar(null);
+        }
         await onSaved(updated);
         message.success(isEdit ? '智能体已更新' : '智能体已创建');
       } else {
@@ -543,15 +570,18 @@ const AgentEditorModal = ({
           </Form.Item>
         </div>
 
-        {agentType === 'runtime' && isEdit && managedAgent ? (
+        {agentType === 'runtime' ? (
           <Form.Item
             label="头像"
             extra="头像会同步展示在智能体管理、智能体中心和对话界面。"
           >
             <div className="agent-avatar-form">
-              <AgentAvatar application={managedAgent} size={56} shape="circle" />
+              <AgentAvatar application={{ name: draftName, icon: draftIcon, avatar_url: avatarPreview || managedAgent?.avatar_url }} size={56} shape="circle" />
               <div className="agent-avatar-form__actions">
-                <Button onClick={() => setAvatarOpen(true)}>修改头像</Button>
+                <Button onClick={() => setAvatarOpen(true)} disabled={saving}>
+                  {savedAgentId ? '修改头像' : pendingAvatar ? '重新选择头像' : '选择头像'}
+                </Button>
+                {pendingAvatar && <Button onClick={() => setPendingAvatar(null)} disabled={saving}>移除待上传头像</Button>}
                 <span>支持静态 png / jpg / jpeg / gif / webp，最大 1024×1024、2MB。</span>
               </div>
             </div>
@@ -691,7 +721,7 @@ const AgentEditorModal = ({
               校验可见性
             </Button>
             <span>
-              校验会以你本人的身份调用运行时接口。
+              校验仅确认运行时平台的可见性，不代表本平台已授权使用；请在企业管理中配置智能体授权。
             </span>
           </div>
         )}
@@ -700,6 +730,7 @@ const AgentEditorModal = ({
       <AgentAvatarModal
         agent={managedAgent}
         open={avatarOpen}
+        onSelected={!savedAgentId ? setPendingAvatar : undefined}
         onClose={() => setAvatarOpen(false)}
         onSaved={async (updated) => {
           setManagedAgent(updated);

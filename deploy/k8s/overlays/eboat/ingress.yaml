@@ -1,0 +1,38 @@
+# 对外入口：复用 Ai.Hengan 的 Higress 网关，新增一条 /xiaoan-platform 路由。
+# 不改动网关已有任何路由。
+#
+# 与 higress-mcp-admin 的差异：那个项目只有前端 + /api 两级反代；
+# 本项目 web 容器内的 nginx 会再做一次前缀剥离并分流到 api/stream，
+# 所以 Ingress 这里【不要】配 rewrite，保持原样转发。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: xiaoan
+  annotations:
+    # SSE 长连接：模型测试台单次请求可能跑 600s，这里给足余量。
+    # 上游 nginx 已设 3600s，网关侧不要小于它。
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # 上传走 multipart，前端 nginx 允许 21MiB，网关也要放开。
+    nginx.ingress.kubernetes.io/proxy-body-size: "21m"
+    # 注意：以上注解仅对 nginx-ingress 生效。Higress 的策略/注解以现场
+    # 已装控制器版本为准，需在控制台配置 SSE 不缓冲 + 长超时后再导流。
+spec:
+  ingressClassName: higress
+  rules:
+    # 与 higress-mcp-admin 挂在同一域名下，靠路径前缀区分。
+    - host: ai.hengan.com
+      http:
+        paths:
+          - path: /xiaoan-platform
+            pathType: Prefix
+            backend:
+              service:
+                name: xiaoan-web
+                port:
+                  number: 80
+  # TLS 暂未启用：生产环境 Cookie 为 Secure，正式流量必须 https。
+  # 证书就绪后取消下面注释，并由运维创建 xiaoan-tls secret。
+  # tls:
+  #   - hosts: [ai.hengan.com]
+  #     secretName: xiaoan-tls

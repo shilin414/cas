@@ -1205,6 +1205,15 @@ func (s *Server) GetApplicationAvatar(w http.ResponseWriter, r *http.Request, id
 		writeSimpleError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// Authoring access includes the avatar preview, not permission to execute.
+	// A manager may upload a private agent's avatar before granting consumption access.
+	if !allowed {
+		allowed, accessErr = s.canReadApplication(r.Context(), app, caller)
+		if accessErr != nil {
+			writeSimpleError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+	}
 	if !allowed {
 		s.denyApplicationVisibility("avatar")
 		writeDetail(w, http.StatusNotFound, "avatar not set")

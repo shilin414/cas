@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/gif"
@@ -21,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shilin414/cas/backend-go/internal/adminrbac"
 	"github.com/shilin414/cas/backend-go/internal/catalog"
 	genapi "github.com/shilin414/cas/backend-go/internal/gen/api"
 	"github.com/shilin414/cas/backend-go/internal/identity"
@@ -286,6 +288,7 @@ func TestGetApplicationAvatarMissingObjectUsesRetryableFallback(t *testing.T) {
 
 type avatarHandlerTestDBState struct {
 	avatarKey string
+	manager   bool
 	execs     int
 }
 
@@ -324,6 +327,13 @@ func (c *avatarHandlerTestConn) Begin() (driver.Tx, error) {
 }
 
 func (c *avatarHandlerTestConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "SELECT EXISTS") {
+		allowed := false
+		if strings.Contains(query, "admin_role_assignments") {
+			allowed = c.state.manager
+		}
+		return &avatarHandlerTestRows{columns: []string{"allowed"}, values: []driver.Value{allowed}}, nil
+	}
 	if !strings.Contains(query, "FROM applications a") {
 		return nil, errors.New("unexpected avatar handler test query: " + query)
 	}
@@ -472,4 +482,34 @@ func withAvatarTestUser(r *http.Request) *http.Request {
 		IsStaff: true,
 	}})
 	return r.WithContext(ctx)
+}
+
+func TestApplicationManagerCanReadPrivateAvatarWithoutConsumeAccess(t *testing.T) {
+	for _, manager := range []bool{false, true} {
+		t.Run(fmt.Sprint(manager), func(t *testing.T) {
+			server, state, store := newAvatarHandlerTestServer(t, "application-avatars/42/private.png")
+			state.manager = manager
+			server.AdminRBAC = &adminrbac.Service{DB: server.DB, Enabled: true}
+			var imageData bytes.Buffer
+			if err := png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+				t.Fatal(err)
+			}
+			store.openData = imageData.Bytes()
+			store.openObject = storage.Object{Size: int64(len(store.openData)), ContentType: "image/png"}
+			req := httptest.NewRequest(http.MethodGet, "/api/v2/applications/42/avatar", nil)
+			req = req.WithContext(context.WithValue(req.Context(), userCtxKey, &AuthenticatedUser{User: &identity.User{ID: 1}}))
+			rec := httptest.NewRecorder()
+			server.GetApplicationAvatar(rec, req, 42)
+			want := http.StatusNotFound
+			if manager {
+				want = http.StatusOK
+			}
+			if rec.Code != want {
+				t.Fatalf("manager=%v status=%d want=%d body=%s", manager, rec.Code, want, rec.Body.String())
+			}
+			if !manager && store.readCalls != 0 {
+				t.Fatal("unauthorized caller read private avatar")
+			}
+		})
+	}
 }
