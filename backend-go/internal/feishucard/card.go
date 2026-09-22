@@ -19,15 +19,22 @@ const (
 
 type Section struct{ Label, Text string }
 type Options struct {
-	Kind                 Kind
-	Title, Subtitle, URL string
-	Sections             []Section
+	AgentName, AgentIcon, AgentImageKey string
+	Kind                                Kind
+	Title, Subtitle, URL                string
+	Sections                            []Section
 }
 
 // Build uses Feishu's native card components. Untrusted titles, names and
-// content are plain_text, never executable mentions or card markup. The full
+// content are plain_text (including native table cells), never executable
+// mentions or card markup. The full
 // Markdown remains unchanged on the read-only web page.
-func Build(o Options) map[string]any {
+func Build(o Options) map[string]any { return build(o, true) }
+
+// BuildLegacy keeps the previous plain-text card as the compatibility fallback.
+func BuildLegacy(o Options) map[string]any { return build(o, false) }
+
+func build(o Options, nativeTables bool) map[string]any {
 	color, eyebrow, action := "blue", "对话分享", "查看完整对话"
 	if o.Kind == Result {
 		color, eyebrow, action = "green", "自动化 · 执行完成", "查看完整结果"
@@ -40,6 +47,25 @@ func Build(o Options) map[string]any {
 		title = eyebrow
 	}
 	elements := []any{}
+	if o.AgentName != "" || o.Kind == Result {
+		name := clip(strings.Join(strings.Fields(o.AgentName), " "), 64)
+		if name == "" {
+			name = "智能体"
+		}
+		icon := clip(strings.Join(strings.Fields(o.AgentIcon), " "), 12)
+		if icon == "" {
+			icon = "🤖"
+		}
+		author := []any{}
+		if nativeTables && o.AgentImageKey != "" {
+			author = append(author, map[string]any{"tag": "img", "img_key": o.AgentImageKey, "alt": map[string]any{"tag": "plain_text", "content": name}})
+		} else {
+			name = icon + " " + name
+		}
+		author = append(author, map[string]any{"tag": "plain_text", "content": name})
+		elements = append(elements, map[string]any{"tag": "note", "elements": author})
+	}
+
 	if o.Subtitle != "" {
 		elements = append(elements, note(clip(o.Subtitle, 120)))
 	}
@@ -49,38 +75,30 @@ func Build(o Options) map[string]any {
 		budget, maxLines = queryPreviewBudget, 160
 	}
 	remaining, shown, truncated := budget, 0, false
+	tableCount := 0
 	for _, section := range o.Sections {
 		if shown >= 4 || remaining <= 0 {
 			truncated = true
 			break
-		}
-		text := previewText(section.Text)
-		if o.Kind == Query {
-			text = clip(strings.Map(func(r rune) rune {
-				if unicode.IsControl(r) && r != '\n' && r != '\t' {
-					return -1
-				}
-				return r
-			}, strings.ReplaceAll(section.Text, "\r\n", "\n")), queryPreviewBudget)
-		}
-		lines := strings.Split(text, "\n")
-		if len(lines) > maxLines {
-			text = strings.Join(lines[:maxLines], "\n") + "\n…"
-			truncated = true
-		}
-		if text == "" {
-			continue
 		}
 		limit := remaining
 		// Reserve most of a conversation's budget for the answer.
 		if section.Label == "提问" && limit > 180 {
 			limit = 180
 		}
-		if len([]rune(text)) > limit {
-			text = clip(text, limit)
-			truncated = true
+		var body []any
+		var used int
+		var shortened bool
+		if nativeTables {
+			body, used, shortened = sectionPreview(section.Text, limit, maxLines, o.Kind == Query, &tableCount)
+		} else {
+			body, used, shortened = plainSectionPreview(section.Text, limit, maxLines, o.Kind == Query)
 		}
-		remaining -= len([]rune(text))
+		truncated = truncated || shortened
+		if len(body) == 0 {
+			continue
+		}
+		remaining -= used
 		label := "✦ 内容预览"
 		switch section.Label {
 		case "查询条件":
@@ -92,7 +110,8 @@ func Build(o Options) map[string]any {
 		case "结果预览":
 			label = "✓ 查询结果"
 		}
-		elements = append(elements, map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": "**" + label + "**"}}, div(text))
+		elements = append(elements, map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": "**" + label + "**"}})
+		elements = append(elements, body...)
 		shown++
 	}
 	if shown == 0 {
@@ -114,7 +133,7 @@ func Build(o Options) map[string]any {
 	if o.Kind == Query {
 		elements = append(elements, note("查询结果已在卡片中，可直接阅读 · 打开应用需登录并具备权限 · 快照24小时有效"))
 	} else {
-		elements = append(elements, note("xiaoan-platform  ·  只读分享"))
+		elements = append(elements, note("小安工作助手  ·  只读分享"))
 	}
 	return map[string]any{
 		"config":   map[string]any{"wide_screen_mode": true, "enable_forward": true},

@@ -147,11 +147,14 @@ func QuerySnapshotURL(base string, snapshot *QuerySnapshot) (string, error) {
 	return u.String(), nil
 }
 func QueryResultCard(snapshot *QuerySnapshot, sender, link string) map[string]any {
+	return feishucard.Build(QueryResultCardOptions(snapshot, sender, link))
+}
+func QueryResultCardOptions(snapshot *QuerySnapshot, sender, link string) feishucard.Options {
 	preview := queryPreview(snapshot.Data)
-	return feishucard.Build(feishucard.Options{Kind: feishucard.Query, Title: snapshot.Title, Subtitle: sender + " 转发 · 查询结果快照", URL: link, Sections: []feishucard.Section{
+	return feishucard.Options{Kind: feishucard.Query, Title: snapshot.Title, Subtitle: sender + " 转发 · 查询结果快照", URL: link, Sections: []feishucard.Section{
 		{Label: "查询条件", Text: snapshot.QueryLabel + "：" + snapshot.QueryValue + "\n查询时间：" + snapshot.QueriedAt.In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04:05") + "（北京时间）"},
 		{Label: "结果预览", Text: preview},
-	}})
+	}}
 }
 func queryPreview(raw json.RawMessage) string {
 	if string(raw) == "null" || string(raw) == `""` {

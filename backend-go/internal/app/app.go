@@ -217,7 +217,7 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	// must run under the schedule owner's identity.
 	disp := delivery.NewDispatcher(dbh, log, metrics)
 	runs.CreateDeliveryExecutionsTx = disp.CreateInTx
-	feishuSender := &delivery.FeishuSender{Client: feishu, Auth: ailyAuth}
+	feishuSender := &delivery.FeishuSender{Client: feishu, Auth: ailyAuth, Storage: st}
 	deliveryLimiter := execution.NewRateLimiter(rdb, rdb.Key("rate", "feishu", "im"), 20, time.Second)
 
 	schedSvc := schedule.NewService(dbh, &schedulableChecker{Catalog: catalogSvc, Users: identityRepo}, log)

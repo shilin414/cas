@@ -70,10 +70,12 @@ export interface ChatMessage {
   error?: string;
   /** Non-terminal retry hint (run.retrying keeps the stream alive). */
   retryNotice?: string;
+  /** Pre-terminal provider text, rendered as an expandable execution process. */
+  processText?: string;
   attachments?: { id: string; name: string }[];
   artifacts?: ChatArtifact[];
   /**
-   * How many UTF-8 BYTES of `content` this bubble has already rendered.
+   * How many UTF-8 BYTES of `processText` this run has already received.
    *
    * It exists because a durable content.chunk carries an INCREMENTAL slice
    * plus its END offset, and the same text also arrives as transient
@@ -82,7 +84,7 @@ export interface ChatMessage {
    * units and therefore disagrees with the backend's byte offsets as soon as
    * a Chinese character or an emoji appears) is what lets the reducer append
    * only what is missing. Absent (history messages, re-seeded bubbles) means
-   * "derive it from content".
+   * "derive it from processText".
    */
   streamBytes?: number;
 }
@@ -178,9 +180,9 @@ export function utf8SliceFromBytes(text: string, skip: number): string {
   return out;
 }
 
-/** Bytes of `content` already rendered (see ChatMessage.streamBytes). */
+/** Bytes of `processText` already received (see ChatMessage.streamBytes). */
 function renderedBytes(message: ChatMessage): number {
-  return message.streamBytes ?? utf8ByteLength(message.content);
+  return message.streamBytes ?? utf8ByteLength(message.processText || '');
 }
 
 function cancelledNotice(errorCode?: string): string {
@@ -265,6 +267,7 @@ export const useRunChatStore = create<RunChatState>()((set, get) => ({
         id: String(m.id),
         role: m.role,
         content: m.content || '',
+        processText: m.metadata?.process_text,
         created_at: m.created_at,
         runId: m.metadata?.run_id,
         status: 'done' as const,
@@ -450,6 +453,7 @@ export const useRunChatStore = create<RunChatState>()((set, get) => ({
       id: `run-${run.id}`,
       role: 'assistant',
       content: '',
+      processText: '',
       created_at: new Date().toISOString(),
       runId: run.id,
       status: 'streaming',
@@ -533,7 +537,7 @@ function applyIncrementalRange(
   if (!Number.isFinite(end) || end < 0) {
     // Pre-第九轮 incremental chunk without an offset: nothing to compare
     // against, so append (the old behaviour).
-    message.content += text;
+    message.processText = (message.processText || '') + text;
     return rendered + utf8ByteLength(text);
   }
   const start = end - utf8ByteLength(text);
@@ -544,14 +548,14 @@ function applyIncrementalRange(
   }
   if (start <= rendered) {
     const tail = utf8SliceFromBytes(text, rendered - start);
-    message.content += tail;
+    message.processText = (message.processText || '') + tail;
     return rendered + utf8ByteLength(tail);
   }
   // A gap: bytes between `rendered` and `start` never arrived (e.g. the
   // client attached after the answer had begun). Dropping this segment would
   // lose real text, so append it and jump the counter to its end — the gap
   // is closed by the terminal event, whose text is authoritative.
-  message.content += text;
+  message.processText = (message.processText || '') + text;
   return end;
 }
 
@@ -581,6 +585,7 @@ export function applyEvent(state: RunChatState, event: RunEventRecord): Partial<
           id: `run-${runId}`,
           role: 'assistant' as const,
           content: '',
+          processText: '',
           created_at: new Date().toISOString(),
           runId,
           status: 'streaming' as const,
@@ -595,6 +600,12 @@ export function applyEvent(state: RunChatState, event: RunEventRecord): Partial<
   }
   const conv = conversations[hostCid];
   const message = { ...conv.messages[idx] };
+  // Late replay must not rewrite a process once the run has reached a terminal state.
+  if (message.status && message.status !== 'streaming'
+    && (event.event_type === 'content.delta' || event.event_type === 'content.chunk')) return {};
+  if (TERMINAL.has(event.event_type) && typeof event.payload?.process_text === 'string') {
+    message.processText = event.payload.process_text;
+  }
   switch (event.event_type) {
       case 'content.delta': {
         // Transient frame: never persisted. 第九轮补丁 3.2-A: the backend
@@ -609,10 +620,7 @@ export function applyEvent(state: RunChatState, event: RunEventRecord): Partial<
         }
         // Legacy delta without an offset (pre-3.2 backend): append — the
         // old behaviour. The two sides must not have to switch in lockstep.
-        const deltaText = payload.text || '';
-        const deltaBefore = renderedBytes(message);
-        message.content += deltaText;
-        message.streamBytes = deltaBefore + utf8ByteLength(deltaText);
+        message.streamBytes = applyIncrementalRange(message, payload);
         break;
       }
       case 'content.chunk':
@@ -623,8 +631,8 @@ export function applyEvent(state: RunChatState, event: RunEventRecord): Partial<
         // events (written before this round) still carry one, and for those
         // replace is self-healing.
         if (typeof event.payload?.snapshot === 'string') {
-          message.content = event.payload.snapshot;
-          message.streamBytes = utf8ByteLength(message.content);
+          message.processText = event.payload.snapshot;
+          message.streamBytes = utf8ByteLength(message.processText);
           break;
         }
         message.streamBytes = applyIncrementalRange(message, event.payload || {});
@@ -644,11 +652,8 @@ export function applyEvent(state: RunChatState, event: RunEventRecord): Partial<
         break;
       }
       case 'run.completed':
-        // Reconciliation text is authoritative when present.
-        if (event.payload?.text) {
-          message.content = event.payload.text;
-          message.streamBytes = utf8ByteLength(message.content);
-        }
+        // Only terminal/provider-reconciled text is an answer, even when empty.
+        if (typeof event.payload?.text === 'string') message.content = event.payload.text;
         message.status = 'done';
         break;
       case 'run.failed':
@@ -744,7 +749,12 @@ function consumeRunEvents(runId: string, generation: number) {
       const patch = applyEvent(state, event);
       if (Object.keys(patch).length) useRunChatStore.setState(patch);
       if (TERMINAL.has(event.event_type)) {
-        void finalizeRun(runId, event.payload?.text as string | undefined, generation);
+        void finalizeRun(
+          runId,
+          typeof event.payload?.text === 'string' ? event.payload.text : undefined,
+          generation,
+          typeof event.payload?.process_text === 'string' ? event.payload.process_text : undefined,
+        );
       }
     },
     onError: () => {
@@ -776,6 +786,7 @@ export async function finalizeRun(
   runId: string,
   eventText?: string,
   generation = captureSessionGeneration(),
+  eventProcessText?: string,
 ) {
   if (!sessionStillCurrent(generation)) return;
   closeRunStream(runId);
@@ -817,14 +828,12 @@ export async function finalizeRun(
       // done —— 用户会看到一个空白的“成功回答”。
       const cancelled = run.status === 'cancelled';
       const failed = run.status === 'failed' || run.status === 'interrupted';
-      // The reconciled text replaces whatever the stream accumulated, so the
-      // byte counter has to follow it — a stale counter would make a later
-      // replayed chunk look "already rendered" (or re-append it).
-      const content = (eventText ?? run.output?.text) || m.content;
+      // Never promote provisional process text, including textless/failed runs.
+      const content = eventText ?? run.output?.text ?? m.content;
       return {
         ...m,
         content,
-        streamBytes: utf8ByteLength(content),
+        processText: eventProcessText ?? run.output?.process_text ?? m.processText,
         status: cancelled
           ? 'cancelled' as const
           : failed

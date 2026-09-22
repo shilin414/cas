@@ -104,6 +104,16 @@ describe('conversation cache reconciliation', () => {
   });
 });
 
+describe('canonical process history', () => {
+  it('restores process metadata without mixing it into persisted reply text', async () => {
+    useRunChatStore.getState().clearAll();
+    axiosMocks.get.mockResolvedValueOnce({ title: 'history', messages: [{ id: 100, role: 'assistant', content: '最终回复', created_at: '', metadata: { run_id: 'history-run', process_text: '完整过程' } }] });
+    await useRunChatStore.getState().loadConversation(90);
+    expect(useRunChatStore.getState().conversations[90].messages[0]).toMatchObject({ content: '最终回复', processText: '完整过程', status: 'done' });
+    useRunChatStore.getState().clearAll();
+  });
+});
+
 describe('applyEvent (unified event protocol rendering)', () => {
   const runId = 'run-1';
 
@@ -138,9 +148,9 @@ describe('applyEvent (unified event protocol rendering)', () => {
   it('content.delta appends incrementally', () => {
     let state = stateWithStream();
     state = reduce(state, event('content.delta', { text: '你' }));
-    expect(state.conversations[42].messages[1].content).toBe('你');
+    expect(state.conversations[42].messages[1].processText).toBe('你');
     state = reduce(state, event('content.delta', { text: '好' }));
-    expect(state.conversations[42].messages[1].content).toBe('你好');
+    expect(state.conversations[42].messages[1].processText).toBe('你好');
   });
 
   it('artifact.discovered pins an artifact card with the local id', () => {
@@ -165,7 +175,7 @@ describe('applyEvent (unified event protocol rendering)', () => {
   // 也以 transient delta 的形式先到过一次。直接 append 会得到两份 ——
   // "你好" 变成 "你好你好"。以下 5 个 case 锁死 offset 对账语义。
   describe('content.chunk offset reconciliation (第九轮 P1-4)', () => {
-    const text = (state: RunChatState) => state.conversations[42].messages[1].content;
+  const text = (state: RunChatState) => state.conversations[42].messages[1].processText ?? '';
 
     it('delta + delta + chunk must not duplicate the answer', () => {
       let state = stateWithStream();
@@ -226,7 +236,7 @@ describe('applyEvent (unified event protocol rendering)', () => {
   // 而不是理论网络乱序。durable cursor 管不了 transient（sequence 恒 0），
   // 唯一可靠信号是 delta 与 chunk 共用的绝对 UTF-8 字节 end offset。
   describe('reverse order: chunk replayed before its buffered deltas (3.2-A)', () => {
-    const text = (state: RunChatState) => state.conversations[42].messages[1].content;
+    const text = (state: RunChatState) => state.conversations[42].messages[1].processText ?? '';
 
     it('Test 1: chunk ABC then late deltas A/B/C renders ABC once', () => {
       let state = stateWithStream();
@@ -279,15 +289,43 @@ describe('applyEvent (unified event protocol rendering)', () => {
     state = reduce(state, event('run.completed', { status: 'succeeded', text: '最终答案' }));
     const msg = state.conversations[42].messages[1];
     expect(msg.content).toBe('最终答案');
+    expect(msg.processText).toBe('流式片段');
     expect(msg.status).toBe('done');
     expect(state.conversations[42].activeRunId).toBeNull();
   });
 
-  it('run.completed without text keeps accumulated deltas', () => {
+  it('run.completed without text keeps deltas only in the process', () => {
     let state = stateWithStream();
     state = reduce(state, event('content.delta', { text: '流式片段' }));
     state = reduce(state, event('run.completed', { status: 'succeeded' }));
-    expect(state.conversations[42].messages[1].content).toBe('流式片段');
+    expect(state.conversations[42].messages[1].content).toBe('');
+    expect(state.conversations[42].messages[1].processText).toBe('流式片段');
+  });
+
+  it('an explicitly empty final text never promotes the process', () => {
+    let state = reduce(stateWithStream(), event('content.delta', { text: '工作流中间结果' }));
+    state = reduce(state, event('run.completed', { text: '' }));
+    expect(state.conversations[42].messages[1]).toMatchObject({ content: '', processText: '工作流中间结果', status: 'done' });
+  });
+
+  it('late content frames cannot mutate a completed process or final answer', () => {
+    let state = reduce(stateWithStream(), event('content.delta', { text: '过程', offset: 6 }));
+    state = reduce(state, event('run.completed', { text: '最终答案' }));
+    state = reduce(state, event('content.chunk', { snapshot: '过期快照' }));
+    state = reduce(state, event('content.delta', { text: '迟到文字' }));
+    expect(state.conversations[42].messages[1]).toMatchObject({ content: '最终答案', processText: '过程' });
+  });
+
+  it('terminal reconciliation replaces incomplete progress and removes streamed final text from it', () => {
+    let state = reduce(stateWithStream(), event('content.delta', { text: '过程一最终答案' }));
+    state = reduce(state, event('run.completed', { text: '最终答案', process_text: '过程一\n\n过程二' }));
+    expect(state.conversations[42].messages[1]).toMatchObject({ content: '最终答案', processText: '过程一\n\n过程二' });
+  });
+
+  it('an empty canonical process clears a single answer duplicated in the stream', () => {
+    let state = reduce(stateWithStream(), event('content.delta', { text: '只有答案' }));
+    state = reduce(state, event('run.completed', { text: '只有答案', process_text: '' }));
+    expect(state.conversations[42].messages[1]).toMatchObject({ content: '只有答案', processText: '' });
   });
 
   it('run.failed surfaces the provider error', () => {
@@ -314,7 +352,8 @@ describe('applyEvent (unified event protocol rendering)', () => {
     const msg = conv.messages[1];
     expect(msg.status).toBe('streaming'); // NOT done / failed
     expect(conv.activeRunId).toBe(runId); // stream stays attached
-    expect(msg.content).toBe('部分回答'); // accumulated content preserved
+    expect(msg.content).toBe('');
+    expect(msg.processText).toBe('部分回答'); // process survives retries
     expect(msg.retryNotice).toBeTruthy();
   });
 
@@ -360,7 +399,8 @@ describe('applyEvent (unified event protocol rendering)', () => {
     const conv = state.conversations[42];
     expect(conv.messages[1].status).toBe('streaming');
     expect(conv.activeRunId).toBe(runId);
-    expect(conv.messages[1].content).toBe('部分回答');
+    expect(conv.messages[1].content).toBe('');
+    expect(conv.messages[1].processText).toBe('部分回答');
     expect(conv.messages[1].retryNotice).toBe('服务暂时停用，等待恢复…');
   });
 
@@ -413,6 +453,33 @@ describe('applyEvent (unified event protocol rendering)', () => {
           },
         },
       });
+    });
+
+    it.each(['succeeded', 'failed', 'cancelled'])('does not promote process during %s reconciliation', async (status) => {
+      useRunChatStore.setState(applyEvent(useRunChatStore.getState(), event('content.delta', { text: '中间进度' })));
+      vi.mocked(getRun).mockResolvedValue({ id: runId, conversation: 42, status } as any);
+      await finalizeRun(runId);
+      expect(useRunChatStore.getState().conversations[42].messages[1]).toMatchObject({ content: '', processText: '中间进度', streamBytes: 12 });
+    });
+
+    it('preserves explicitly empty terminal text over a stale GET output', async () => {
+      vi.mocked(getRun).mockResolvedValue({ id: runId, conversation: 42, status: 'succeeded', output: { text: 'stale' } } as any);
+      await finalizeRun(runId, '');
+      expect(useRunChatStore.getState().conversations[42].messages[1].content).toBe('');
+    });
+
+    it('GET reconciliation restores canonical process separately from the answer', async () => {
+      useRunChatStore.setState(applyEvent(useRunChatStore.getState(), event('content.delta', { text: 'partial' })));
+      vi.mocked(getRun).mockResolvedValue({ id: runId, conversation: 42, status: 'succeeded', output: { text: 'answer', process_text: 'complete progress' } } as any);
+      await finalizeRun(runId);
+      expect(useRunChatStore.getState().conversations[42].messages[1]).toMatchObject({ content: 'answer', processText: 'complete progress' });
+    });
+
+    it.each(['', 'authoritative process'])('preserves terminal process %j over stale GET metadata', async (process) => {
+      useRunChatStore.setState(applyEvent(useRunChatStore.getState(), event('run.completed', { text: 'final answer', process_text: process })));
+      vi.mocked(getRun).mockResolvedValue({ id: runId, conversation: 42, status: 'succeeded', output: { text: 'stale answer', process_text: 'stale process' } } as any);
+      await finalizeRun(runId, 'final answer', undefined, process);
+      expect(useRunChatStore.getState().conversations[42].messages[1]).toMatchObject({ content: 'final answer', processText: process });
     });
 
     it('keeps a cancelled run cancelled (never done)', async () => {
@@ -591,7 +658,8 @@ describe('applyEvent (unified event protocol rendering)', () => {
     const after = reduce(wiped, event('content.delta', { text: '流式内容' }));
     const conv = after.conversations[42];
     const seeded = conv.messages.find((m) => m.id === `run-${runId}`);
-    expect(seeded?.content).toBe('流式内容');
+    expect(seeded?.content).toBe('');
+    expect(seeded?.processText).toBe('流式内容');
     expect(seeded?.status).toBe('streaming');
     expect(conv.activeRunId).toBe(runId);
   });

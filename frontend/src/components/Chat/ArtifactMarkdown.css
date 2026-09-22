@@ -1,0 +1,114 @@
+/* Shared by conversation answers and public shares. No global table overrides. */
+.artifact-markdown {
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.artifact-markdown p { margin: 0 0 0.75em; }
+.artifact-markdown h1,
+.artifact-markdown h2,
+.artifact-markdown h3,
+.artifact-markdown h4,
+.artifact-markdown h5,
+.artifact-markdown h6 {
+  margin: 1.2em 0 0.6em;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.artifact-markdown h1 { font-size: 1.35em; }
+.artifact-markdown h2 { font-size: 1.2em; }
+.artifact-markdown h3 { font-size: 1.1em; }
+.artifact-markdown h4,
+.artifact-markdown h5,
+.artifact-markdown h6 { font-size: 1em; }
+.artifact-markdown ul,
+.artifact-markdown ol { margin: 0.65em 0; padding-left: 1.5em; }
+.artifact-markdown ul { list-style: disc; }
+.artifact-markdown ol { list-style: decimal; }
+.artifact-markdown li + li { margin-top: 0.35em; }
+.artifact-markdown hr { margin: 1em 0; border: 0; border-top: 1px solid var(--color-border); }
+.artifact-markdown > :first-child { margin-top: 0; }
+.artifact-markdown > :last-child { margin-bottom: 0; }
+
+.artifact-markdown__table-scroll {
+  max-width: 100%;
+  margin: 12px 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.artifact-markdown__table-scroll:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.artifact-markdown table {
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.artifact-markdown th,
+.artifact-markdown td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.artifact-markdown th {
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.artifact-markdown th + th,
+.artifact-markdown td + td { border-left: 1px solid var(--color-border); }
+.artifact-markdown tbody tr:last-child td { border-bottom: 0; }
+.artifact-markdown tbody tr:nth-child(even) { background: color-mix(in srgb, var(--color-bg-elevated) 50%, transparent); }
+.artifact-markdown [align="right"] { text-align: right; }
+.artifact-markdown [align="center"] { text-align: center; }
+
+@media (max-width: 640px) {
+  .artifact-markdown th,
+  .artifact-markdown td { padding: 8px 10px; }
+}
+
+/* Keep fenced whitespace intact while scrolling the code, not the page. */
+.artifact-markdown pre {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+  overscroll-behavior-x: contain;
+}
+
+/* Spin renders a div, which is invalid inside Markdown image paragraphs. */
+.chat-img__spinner {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  color: var(--color-primary);
+  animation: chat-img-spin 0.8s linear infinite;
+}
+
+@keyframes chat-img-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-img__spinner { animation: none; }
+}

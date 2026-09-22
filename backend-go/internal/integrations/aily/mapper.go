@@ -52,25 +52,44 @@ func (Mapper) MapProviderStatus(raw string) string {
 	return ""
 }
 
-// ExtractFinalText joins the text items of a chat result.
-func (m Mapper) ExtractFinalText(chatResult map[string]any) string {
-	out := ""
+// SplitResponseText separates Aily's ordered response messages. In observed
+// chat-result payloads (including the 7-message sales-query regression), content
+// contains successive assistant messages, not token chunks: the last nonblank
+// text message is the reply, preceding messages are execution progress. Artifact
+// entries may follow it. Do not guess boundaries from prose, headings or keywords.
+// A single text message is kept whole; this cannot split unmarked reasoning
+// embedded by the provider inside that same message.
+func (m Mapper) SplitResponseText(chatResult map[string]any) (final, process string) {
+	var texts []string
 	items, _ := chatResult["content"].([]any)
 	for _, item := range items {
 		cm, ok := item.(map[string]any)
-		if !ok {
+		if !ok || cm["type"] != "text" {
 			continue
 		}
-		if t, _ := cm["type"].(string); t == "text" {
-			if txt, ok := cm["text"].(string); ok {
-				out += txt
-			}
+		text, ok := cm["text"].(string)
+		if ok && strings.TrimSpace(text) != "" {
+			texts = append(texts, text)
 		}
 	}
-	return out
+	if len(texts) == 0 {
+		return "", ""
+	}
+	status, _ := chatResult["status"].(string)
+	switch m.MapProviderStatus(status) {
+	case "failed", "cancelled":
+		return "", strings.Join(texts, "\n\n")
+	}
+	return texts[len(texts)-1], strings.Join(texts[:len(texts)-1], "\n\n")
 }
 
-var markdownArtifactRe = regexp.MustCompile(`\((?:\./)?artifacts?/(?:[^)/]+/)*([^)/]+\.\w+)\)`)
+// ExtractFinalText excludes earlier execution messages from the canonical reply.
+func (m Mapper) ExtractFinalText(chatResult map[string]any) string {
+	final, _ := m.SplitResponseText(chatResult)
+	return final
+}
+
+var markdownArtifactRe = regexp.MustCompile(`\((?:\./)?artifacts?/((?:[^)/]+/)*[^)/]+\.\w+)\)`)
 
 // DiscoveredArtifact pairs an external artifact id with a display name.
 type DiscoveredArtifact struct {
@@ -85,7 +104,8 @@ func (m Mapper) ExtractArtifacts(chatResult map[string]any) []DiscoveredArtifact
 
 	// First collect markdown filenames from text items in content order.
 	// (All matches per item: one text blob may embed several files.)
-	var pending []string
+	type reference struct{ group, file string }
+	var pending []reference
 	for _, item := range items {
 		cm, ok := item.(map[string]any)
 		if !ok || cm["agent_artifact_id"] != nil {
@@ -94,7 +114,8 @@ func (m Mapper) ExtractArtifacts(chatResult map[string]any) []DiscoveredArtifact
 		if txt, _ := cm["text"].(string); txt != "" {
 			for _, match := range markdownArtifactRe.FindAllStringSubmatch(txt, -1) {
 				if len(match) > 1 {
-					pending = append(pending, match[1])
+					parts := strings.Split(match[1], "/")
+					pending = append(pending, reference{group: parts[0], file: parts[len(parts)-1]})
 				}
 			}
 		}
@@ -111,17 +132,24 @@ func (m Mapper) ExtractArtifacts(chatResult map[string]any) []DiscoveredArtifact
 			continue
 		}
 		name, _ := cm["name"].(string)
-		if name == "" {
-			for len(pending) > 0 {
-				candidate := pending[0]
-				pending = pending[1:]
-				if candidate != "" {
-					name = candidate
-					break
-				}
+		ptype, _ := cm["artifact_type"].(string)
+		gallery := ptype == "sandbox_gallery"
+		if name == "" && len(pending) > 0 {
+			name = pending[0].file
+			if gallery {
+				name = pending[0].group
 			}
 		}
-		ptype, _ := cm["artifact_type"].(string)
+		// A gallery consumes its whole group, not one filename. Explicit names
+		// also consume their matching refs so later unnamed entries do not shift.
+		remaining := pending[:0]
+		for _, ref := range pending {
+			if (gallery && ref.group == name) || (!gallery && ref.file == name) {
+				continue
+			}
+			remaining = append(remaining, ref)
+		}
+		pending = remaining
 		out = append(out, DiscoveredArtifact{ExternalID: externalID, ProviderType: ptype, Name: name})
 	}
 	return out

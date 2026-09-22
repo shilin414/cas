@@ -1,15 +1,18 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/shilin414/cas/backend-go/internal/feishucard"
 	genapi "github.com/shilin414/cas/backend-go/internal/gen/api"
 	db "github.com/shilin414/cas/backend-go/internal/gen/db"
+	"github.com/shilin414/cas/backend-go/internal/identity"
 	"github.com/shilin414/cas/backend-go/internal/sharing"
 )
 
@@ -176,9 +179,27 @@ func (s *Server) ForwardShareToFeishu(w http.ResponseWriter, r *http.Request) {
 	if sender == "" {
 		sender = caller.User.Username
 	}
-	card := feishuShareCard(sender, sharing.SnapshotTitle(entries, conv.Title), len(entries), shareURL, selected)
-	cardJSON, _ := json.Marshal(card)
-	content := string(cardJSON)
+	options := feishuShareOptions(sender, sharing.SnapshotTitle(entries, conv.Title), len(entries), shareURL, selected)
+	if len(selected) > 0 && options.AgentName != "多个智能体" {
+		for _, message := range selected {
+			if message.Role == "assistant" && message.AgentAvatarKey != "" {
+				avatarCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+				imageKey, avatarErr := s.Feishu.UploadStoredCardAvatar(avatarCtx, uat, s.Storage, message.AgentAvatarKey)
+				cancel()
+				if avatarErr == nil {
+					options.AgentImageKey = imageKey
+				} else if s.Log != nil {
+					s.Log.Warn("share avatar unavailable; using icon fallback")
+				}
+				break
+			}
+		}
+	}
+	prepared, prepareErr := feishucard.Prepare(options)
+	if prepareErr != nil {
+		writeSimpleError(w, http.StatusInternalServerError, "卡片生成失败")
+		return
+	}
 
 	results := make([]map[string]any, 0, len(body.Targets))
 	success := 0
@@ -191,7 +212,12 @@ func (s *Server) ForwardShareToFeishu(w http.ResponseWriter, r *http.Request) {
 		if t.TargetType == "chat" {
 			receiveIDType = "chat_id"
 		}
-		err := s.Feishu.SendIMMessage(r.Context(), uat, receiveIDType, t.Id, "interactive", content)
+		fallback, err := identity.SendCardWithFallback(r.Context(), prepared.Content, prepared.Fallback, func(ctx context.Context, content string) error {
+			return s.Feishu.SendIMMessage(ctx, uat, receiveIDType, t.Id, "interactive", content)
+		})
+		if (fallback || prepared.Downgraded) && s.Log != nil {
+			s.Log.Warn("share card downgraded to plain preview", "fallback_sent", err == nil)
+		}
 		ok := err == nil
 		if ok {
 			success++
@@ -212,8 +238,24 @@ func (s *Server) ForwardShareToFeishu(w http.ResponseWriter, r *http.Request) {
 // feishuShareCard builds the interactive card payload (before JSON-encoding
 // into the message content string).
 func feishuShareCard(sender, title string, messageCount int, shareURL string, messages []sharing.Message) map[string]any {
+	return feishucard.Build(feishuShareOptions(sender, title, messageCount, shareURL, messages))
+}
+
+func feishuShareOptions(sender, title string, messageCount int, shareURL string, messages []sharing.Message) feishucard.Options {
 	sections := make([]feishucard.Section, 0, len(messages))
+	agentName, agentIcon := "", ""
+	sourceSet := false
 	for _, m := range messages {
+		if m.Role == "assistant" {
+			if !sourceSet {
+				agentName = m.AgentName
+				agentIcon = m.AgentIcon
+				sourceSet = true
+			} else if agentName != m.AgentName {
+				agentName = "多个智能体"
+				agentIcon = "🤖"
+			}
+		}
 		label := "回答预览"
 		if m.Role == "user" {
 			label = "提问"
@@ -224,8 +266,11 @@ func feishuShareCard(sender, title string, messageCount int, shareURL string, me
 		}
 		sections = append(sections, feishucard.Section{Label: label, Text: content})
 	}
-	return feishucard.Build(feishucard.Options{Kind: feishucard.Conversation, Title: title,
-		Subtitle: fmt.Sprintf("%s 分享 · %d 条消息", sender, messageCount), URL: shareURL, Sections: sections})
+	if sourceSet && agentName == "" {
+		agentName = "智能体"
+	}
+	return feishucard.Options{Kind: feishucard.Conversation, Title: title, AgentName: agentName, AgentIcon: agentIcon,
+		Subtitle: fmt.Sprintf("%s 分享 · %d 条消息", sender, messageCount), URL: shareURL, Sections: sections}
 }
 
 // shareOrigin derives the SPA origin for the share link from the request's

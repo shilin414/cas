@@ -12,6 +12,11 @@
 - **认证**：HttpOnly Opaque Session Cookie + CSRF double-submit；前端不保存 JWT。
 - **Provider**：当前已完成飞书 Aily Agent；Aily Workflow、Codex、GraphFlow、HTTP Adapter 属后续 G12。
 
+## 对话与分享排查
+
+- [Aily 执行过程与最终回复：边界和排查](docs/aily-response-boundaries.md)
+- [飞书分享卡片：表格、智能体和降级](docs/feishu-share-cards.md)
+
 权威设计与进度文档：
 
 - [Go 后端目标架构](docs/Creation%20Agent%20Studio%20Go%20后端目标架构.md)

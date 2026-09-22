@@ -1,6 +1,8 @@
 package sharing
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,5 +55,25 @@ func TestSnapshotTitleNeverLeaksReusedConversationForInlineResults(t *testing.T)
 	}
 	if got := SnapshotTitle([]Entry{{ID: 7}}, "Selected conversation"); got != "Selected conversation" {
 		t.Fatalf("manual share title changed: %q", got)
+	}
+}
+
+func TestResolvedSharePinsAgentButNeverExposesStorageKey(t *testing.T) {
+	text := "final"
+	entries := []Entry{{Role: "assistant", Content: &text, AgentName: "创作助手", AgentIcon: "✨", AgentAvatarKey: "application-avatars/1/snapshot.png"}}
+	resolved := Resolve(entries, nil)
+	if len(resolved) != 1 || resolved[0].AgentName != "创作助手" || resolved[0].AgentAvatarKey != entries[0].AgentAvatarKey {
+		t.Fatalf("identity lost: %#v", resolved)
+	}
+	raw, err := json.Marshal(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "application-avatars") || strings.Contains(string(raw), "avatar_key") {
+		t.Fatal("private storage key leaked")
+	}
+	stored, _ := json.Marshal(entries)
+	if !strings.Contains(string(stored), "application-avatars") {
+		t.Fatal("snapshot must pin private avatar reference")
 	}
 }

@@ -17,7 +17,7 @@ export interface RunRecord {
   runtime_type: string;
   status: 'queued' | 'running' | 'waiting_input' | 'waiting_external'
     | 'cancelling' | 'cancelled' | 'succeeded' | 'failed' | 'interrupted';
-  output?: { text?: string } | null;
+  output?: { text?: string; process_text?: string } | null;
   error_code?: string;
   error_message?: string;
   created_at: string;

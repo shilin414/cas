@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
-  title: xiaoan-platform API
+  title: 小安工作助手 API
   version: 2.0.0
   description: |
-    xiaoan-platform backend contract (Go control plane).
+    小安工作助手后端接口契约（Go 控制面）。
 
     This file is the single source of truth for the HTTP API.
     Go server types and TypeScript clients are generated from it.
@@ -1485,6 +1485,12 @@ paths:
         schema: { type: string, format: uuid }
     get:
       operationId: openArtifact
+      parameters:
+        - name: filename
+          in: query
+          required: false
+          description: Expected gallery member basename. Returns 404 rather than redirecting to a different member; never rewrites a provider-signed URL.
+          schema: { type: string, maxLength: 255 }
       tags: [artifacts]
       summary: Resolve artifact URL (24h cache refresh) and 302 to the provider URL
       description: Cookie-authenticated (browser navigation). The provider
@@ -1786,6 +1792,12 @@ paths:
         schema: { type: string, format: uuid }
     get:
       operationId: openPublicShareArtifact
+      parameters:
+        - name: filename
+          in: query
+          required: false
+          description: Expected gallery member basename. Returns 404 rather than redirecting to a different member; never rewrites a provider-signed URL.
+          schema: { type: string, maxLength: 255 }
       tags: [runs]
       summary: Resolve an artifact of a share snapshot (no authentication) and 302 to the provider URL
       description: |
@@ -3886,6 +3898,8 @@ components:
             required: [role, content, created_at]
             properties:
               role: { type: string, enum: [user, assistant, system] }
+              agent_name: { type: string, description: Agent name pinned when the share was created. }
+              agent_icon: { type: string, description: Agent fallback icon pinned with the share. }
               content: { type: string }
               created_at: { type: string, format: date-time }
               artifacts:

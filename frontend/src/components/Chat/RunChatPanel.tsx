@@ -69,7 +69,7 @@ import {
 } from '@/components/Mobile';
 import type { PendingUpload } from '@/components/Mobile';
 import ArtifactCard from './ArtifactCard';
-import { MarkdownWithArtifacts } from './ArtifactMarkdown';
+import AssistantResponse from './AssistantResponse';
 import FeishuForwardModal from './FeishuForwardModal';
 import './chatSurface.css';
 import './RunChatPanel.css';
@@ -174,8 +174,9 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
   const entities = useApplicationEntityStore((state) => state.byId);
   const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const followTranscript = useRef(true);
+  const scrollConversation = useRef<number | null>(null);
   // Mobile-only sheets (§8/§10): the composer's 技能 and ＋ entries.
   const [skillSheetOpen, setSkillSheetOpen] = useState(false);
   const [attachmentSheetOpen, setAttachmentSheetOpen] = useState(false);
@@ -184,7 +185,7 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
   // Scroll restore applies once, and only to a list that already has content
   // (restoring into an empty list would be overwritten by the auto-scroll).
   const pendingScrollRestore = useRef<number | null>(
-    initialScrollTop && initialScrollTop > 0 ? initialScrollTop : null);
+    initialScrollTop != null && initialScrollTop >= 0 ? initialScrollTop : null);
   // Guided drafts arrive as a prop change; only adopt them once per value.
   const lastDraftRef = useRef<string | undefined>(undefined);
 
@@ -375,13 +376,20 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
   useEffect(() => {
     const el = messagesRef.current;
     if (!el || messages.length === 0) return;
+    if (scrollConversation.current !== displayConversationId) {
+      scrollConversation.current = displayConversationId;
+      followTranscript.current = true;
+    }
     if (pendingScrollRestore.current != null) {
       el.scrollTop = pendingScrollRestore.current;
       pendingScrollRestore.current = null;
+      followTranscript.current = el.scrollHeight - el.clientHeight - el.scrollTop < 64;
       return;
     }
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    // Do not pull someone reading history back down on every token. Direct
+    // scrolling avoids smooth-scroll events falsely disabling tail following.
+    if (followTranscript.current) el.scrollTop = el.scrollHeight;
+  }, [messages, displayConversationId]);
 
   // Fallback application for the Home Workspace composer: the bootstrap's
   // main agent — the same row the shortcut list uses, so the composer and the
@@ -494,6 +502,7 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
     // would refill the textarea after our later setInputValue('').
     updateInput('');
     setPendingUploads([]);
+    followTranscript.current = true;
     setSending(true);
     try {
       const cid = await sendMessage({
@@ -580,8 +589,6 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
           <div className={`run-chat-bubble ${isUser ? 'run-chat-bubble--user' : ''}`}>
             <div className="run-chat-bubble__header">
               <span className="font-medium chat-sender-name" title={senderLabel}>{senderLabel}</span>
-              {msg.status === 'streaming' && !msg.retryNotice && <span className="run-chat-dotting">生成中…</span>}
-              {msg.status === 'streaming' && msg.retryNotice && <span className="run-chat-dotting">{msg.retryNotice}</span>}
               {msg.status === 'failed' && <span className="run-chat-error-tag">失败</span>}
               {msg.status === 'cancelled' && (
                 <Tooltip title={msg.error || '应用或运行配置已停用，本次执行已取消。'}>
@@ -592,9 +599,7 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
           {isUser ? (
             <span>{msg.content}</span>
           ) : (
-            <div className="prose prose-sm dark:prose-invert max-w-none">
-              <MarkdownWithArtifacts content={msg.content} artifacts={msg.artifacts} />
-            </div>
+            <AssistantResponse message={msg} />
           )}
           {msg.attachments?.length ? (
             <div className="run-chat-upload-row">
@@ -713,11 +718,14 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
         <div
           className="chat-messages"
           ref={messagesRef}
-          onScroll={(e) => onScrollTopChange?.(e.currentTarget.scrollTop)}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            followTranscript.current = el.scrollHeight - el.clientHeight - el.scrollTop < 64;
+            onScrollTopChange?.(el.scrollTop);
+          }}
         >
           <div className="chat-messages-inner">
             {messages.map((m, i) => renderMessage(m, i))}
-            <div ref={messagesEndRef} />
           </div>
         </div>
       )}

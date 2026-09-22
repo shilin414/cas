@@ -93,7 +93,7 @@ const SharePage: React.FC = () => {
           {data.messages.map((msg, i) => {
             const isUser = msg.role === 'user';
             const isSystem = msg.role === 'system';
-            const sender = isUser ? '用户' : isSystem ? '系统' : '智能体';
+            const sender = isUser ? '用户' : isSystem ? '系统' : msg.agent_name || '智能体';
             return (
               <div
                 key={i}
@@ -109,7 +109,7 @@ const SharePage: React.FC = () => {
                     color: isUser ? '#fff' : 'var(--color-primary)',
                   }}
                 >
-                  {isUser ? '用' : isSystem ? '系' : 'AI'}
+                  {isUser ? '用' : isSystem ? '系' : msg.agent_icon || 'AI'}
                 </Avatar>
                 <div className={`share-msg__bubble ${isUser ? 'share-msg__bubble--user' : ''}`}>
                   <div className="share-msg__header">

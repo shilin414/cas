@@ -22,6 +22,8 @@ export interface PublicShareArtifact {
 }
 
 export interface PublicShareMessage {
+  agent_name?: string;
+  agent_icon?: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   created_at: string;

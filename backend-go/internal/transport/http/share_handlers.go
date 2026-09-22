@@ -6,11 +6,12 @@ import (
 	"sort"
 	"strings"
 
+	openapi_types "github.com/oapi-codegen/runtime/types"
+	genapi "github.com/shilin414/cas/backend-go/internal/gen/api"
 	db "github.com/shilin414/cas/backend-go/internal/gen/db"
 	"github.com/shilin414/cas/backend-go/internal/platform/dbtypes"
 	"github.com/shilin414/cas/backend-go/internal/platform/ids"
 	"github.com/shilin414/cas/backend-go/internal/sharing"
-	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 // ────────────────────────────────────────────── conversation shares ──
@@ -90,9 +91,21 @@ func (s *Server) CreateConversationShare(w http.ResponseWriter, r *http.Request,
 	for _, m := range msgs {
 		byID[m.ID] = m
 	}
+	var sourceAgent db.GetApplicationByIDRow
+	if conv.ApplicationID.Valid {
+		sourceAgent, err = q.GetApplicationByID(ctx, uint64(conv.ApplicationID.Int64))
+		if err != nil && s.Log != nil {
+			s.Log.Warn("share agent identity unavailable", "application_id", conv.ApplicationID.Int64)
+		}
+	}
 	entries := make([]shareMessageEntry, 0, len(requested))
 	for _, id := range requested {
 		entry := shareMessageEntry{ID: int64(id)}
+		if byID[uint64(id)].Role == "assistant" {
+			entry.AgentName = sourceAgent.Name
+			entry.AgentIcon = sourceAgent.Icon
+			entry.AgentAvatarKey = sourceAgent.AvatarKey
+		}
 		var meta map[string]any
 		if raw := byID[uint64(id)].Metadata; len(raw) > 0 && string(raw) != "null" {
 			if json.Unmarshal(raw, &meta) == nil && meta != nil {
@@ -218,7 +231,7 @@ func (s *Server) GetPublicShare(w http.ResponseWriter, r *http.Request, shareTok
 
 // OpenPublicShareArtifact implements GET
 // /api/v2/public/shares/{token}/artifacts/{id}/open (public route).
-func (s *Server) OpenPublicShareArtifact(w http.ResponseWriter, r *http.Request, shareToken string, artifactId openapi_types.UUID) {
+func (s *Server) OpenPublicShareArtifact(w http.ResponseWriter, r *http.Request, shareToken string, artifactId openapi_types.UUID, _ genapi.OpenPublicShareArtifactParams) {
 	ctx := r.Context()
 	q := s.Runs.Querier()
 	share, err := q.GetConversationShareByToken(ctx, shareToken)

@@ -231,7 +231,7 @@ func (a *AgentAdapter) Status(ctx context.Context, auth *catalog.ProviderAuthCon
 		return nil, err
 	}
 	mapper := Mapper{}
-	text := mapper.ExtractFinalText(data)
+	text, processText := mapper.SplitResponseText(data)
 	status, _ := data["status"].(string)
 	finishReason, _ := data["finish_reason"].(string)
 	artifacts := mapper.ExtractArtifacts(data)
@@ -248,9 +248,10 @@ func (a *AgentAdapter) Status(ctx context.Context, auth *catalog.ProviderAuthCon
 		ProviderStatus: status,
 		FinishReason:   finishReason,
 		Output: map[string]any{
-			"text":       text,
-			"artifacts":  arts,
-			"raw_status": status,
+			"text":         text,
+			"process_text": processText,
+			"artifacts":    arts,
+			"raw_status":   status,
 		},
 		Raw: data,
 	}, nil

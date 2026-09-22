@@ -18,8 +18,11 @@ type ArtifactRef struct {
 	Name       string `json:"name"`
 }
 type Entry struct {
-	ID        int64         `json:"id,omitempty"`
-	Artifacts []ArtifactRef `json:"artifacts,omitempty"`
+	AgentName      string        `json:"agent_name,omitempty"`
+	AgentIcon      string        `json:"agent_icon,omitempty"`
+	AgentAvatarKey string        `json:"agent_avatar_key,omitempty"`
+	ID             int64         `json:"id,omitempty"`
+	Artifacts      []ArtifactRef `json:"artifacts,omitempty"`
 	// Inline content is written only by the delivery service. Older manual
 	// shares keep resolving selected IDs, preserving their existing behavior.
 	Content   *string   `json:"content,omitempty"`
@@ -28,10 +31,13 @@ type Entry struct {
 	Title     string    `json:"title,omitempty"`
 }
 type Message struct {
-	Role      string        `json:"role"`
-	Content   string        `json:"content"`
-	CreatedAt time.Time     `json:"created_at"`
-	Artifacts []ArtifactRef `json:"artifacts,omitempty"`
+	AgentName      string        `json:"agent_name,omitempty"`
+	AgentIcon      string        `json:"agent_icon,omitempty"`
+	AgentAvatarKey string        `json:"-"`
+	Role           string        `json:"role"`
+	Content        string        `json:"content"`
+	CreatedAt      time.Time     `json:"created_at"`
+	Artifacts      []ArtifactRef `json:"artifacts,omitempty"`
 }
 
 func Resolve(entries []Entry, messages []db.Message) []Message {
@@ -42,11 +48,11 @@ func Resolve(entries []Entry, messages []db.Message) []Message {
 	out := make([]Message, 0, len(entries))
 	for _, e := range entries {
 		if e.Content != nil {
-			out = append(out, Message{Role: e.Role, Content: *e.Content, CreatedAt: e.CreatedAt, Artifacts: e.Artifacts})
+			out = append(out, Message{Role: e.Role, Content: *e.Content, CreatedAt: e.CreatedAt, Artifacts: e.Artifacts, AgentName: e.AgentName, AgentIcon: e.AgentIcon, AgentAvatarKey: e.AgentAvatarKey})
 			continue
 		}
 		if m, ok := byID[uint64(e.ID)]; ok {
-			out = append(out, Message{Role: m.Role, Content: m.Content, CreatedAt: m.CreatedAt, Artifacts: e.Artifacts})
+			out = append(out, Message{Role: m.Role, Content: m.Content, CreatedAt: m.CreatedAt, Artifacts: e.Artifacts, AgentName: e.AgentName, AgentIcon: e.AgentIcon, AgentAvatarKey: e.AgentAvatarKey})
 		}
 	}
 	return out

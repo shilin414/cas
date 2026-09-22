@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChatMessage } from '../useRunChatStore';
 import type { RunRecord } from '@/services/runApi';
 import { applyEvent, closeRunStream, finalizeRun, useRunChatStore } from '../useRunChatStore';
 
@@ -15,6 +16,15 @@ vi.mock('@/stores/useWorkspaceBootstrapStore', () => ({
 vi.mock('../useConversationStore', () => ({
   useConversationStore: { getState: () => ({ fetchConversations: vi.fn() }) },
 }));
+
+// Timeline assertions inspect provisional text separately from final answers.
+function timelineText(message: ChatMessage): string {
+  if (message.status === 'streaming') {
+    expect(message.content).toBe('');
+    return message.processText ?? '';
+  }
+  return message.content;
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -61,14 +71,14 @@ describe('chat history request ownership', () => {
       history.resolve({ messages: previousMessages });
       await loading;
       const hydrated = useRunChatStore.getState().conversations[11];
-      expect(hydrated.messages.map((m) => m.content)).toEqual([
+      expect(hydrated.messages.map(timelineText)).toEqual([
         'previous question', 'previous answer', 'hello',
         order === 'completion-first' ? 'final answer' : 'live answer',
       ]);
       expect(hydrated.activeRunId).toBe(order === 'completion-first' ? null : run.id);
       if (order === 'history-first') await finalizeRun(run.id);
       const state = useRunChatStore.getState();
-      expect(state.conversations[11].messages.map((m) => m.content)).toEqual([
+      expect(state.conversations[11].messages.map(timelineText)).toEqual([
         'previous question', 'previous answer', 'hello', 'final answer',
       ]);
       expect(state.conversations[11].messages[3].status).toBe('done');
@@ -91,7 +101,7 @@ describe('chat history request ownership', () => {
     ] });
     await loading;
     const conv = useRunChatStore.getState().conversations[11];
-    expect(conv.messages.map((m) => m.content)).toEqual(['previous question', 'previous answer', 'hello', 'live answer']);
+    expect(conv.messages.map(timelineText)).toEqual(['previous question', 'previous answer', 'hello', 'live answer']);
     expect(conv.messages[2]).toBe(liveMessages[0]);
     expect(conv.messages[3]).toBe(liveMessages[1]);
     expect(conv.messages[3].status).toBe('streaming');
@@ -113,7 +123,7 @@ describe('chat history request ownership', () => {
     history.resolve({ messages: previousMessages });
     await loading;
     const conv = useRunChatStore.getState().conversations[11];
-    expect(conv.messages.map((m) => m.content)).toEqual([
+    expect(conv.messages.map(timelineText)).toEqual([
       'previous question', 'previous answer', 'hello', 'final answer', 'second turn', 'second answer',
     ]);
     expect(conv.activeRunId).toBe('run-b');
@@ -148,7 +158,7 @@ describe('chat history request ownership', () => {
           : []),
       ] });
       await loading;
-      const contents = () => useRunChatStore.getState().conversations[11].messages.map((message) => message.content);
+      const contents = () => useRunChatStore.getState().conversations[11].messages.map(timelineText);
       const prefix = ['previous question', 'previous answer', 'hello', 'final answer', 'second turn'];
       // Soft assertions let the same reproduction exercise the later ack too.
       expect.soft(contents()).toEqual([...prefix, ...(hasPersistedAssistant ? ['second final'] : [])]);
@@ -207,7 +217,7 @@ describe('chat history request ownership', () => {
       { id: 105, role: 'user', content: 'second turn', created_at: '', metadata: { run_id: 'run-b' } },
     ] });
     await loading;
-    const contents = () => useRunChatStore.getState().conversations[11].messages.map((message) => message.content);
+    const contents = () => useRunChatStore.getState().conversations[11].messages.map(timelineText);
     expect(contents()).toEqual(['previous question', 'previous answer', 'hello', '', 'second turn']);
     expect(useRunChatStore.getState().conversations[11].messages[3]).toBe(failedA);
 
@@ -233,7 +243,7 @@ describe('chat history request ownership', () => {
     await older;
     const conv = useRunChatStore.getState().conversations[11];
     expect(conv.title).toBe('current history');
-    expect(conv.messages.map((m) => m.content)).toEqual(['previous question', 'previous answer', 'hello', 'live answer']);
+    expect(conv.messages.map(timelineText)).toEqual(['previous question', 'previous answer', 'hello', 'live answer']);
     expect(conv.activeRunId).toBe(run.id);
   });
 
@@ -247,7 +257,7 @@ describe('chat history request ownership', () => {
     mocks.openRunStream.mock.calls[0][1].onEvent(delta);
     history.resolve({ messages: [previousMessages[0], { ...previousMessages[1], content: 'updated prior answer' }] });
     await loading;
-    expect(useRunChatStore.getState().conversations[11].messages.map((m) => m.content)).toEqual([
+    expect(useRunChatStore.getState().conversations[11].messages.map(timelineText)).toEqual([
       'previous question', 'updated prior answer', 'hello', 'live answer',
     ]);
   });
@@ -326,6 +336,19 @@ describe('history invalidation boundaries', () => {
 });
 
 describe('run stream ownership', () => {
+  it('passes explicit empty terminal process through asynchronous GET reconciliation', async () => {
+    await send();
+    const onEvent = mocks.openRunStream.mock.calls[0][1].onEvent;
+    onEvent(delta);
+    mocks.getRun.mockResolvedValueOnce({ ...run, status: 'succeeded', output: { text: 'stale answer', process_text: 'stale process' } });
+    onEvent({ run_id: run.id, sequence: 2, event_type: 'run.completed', payload: { text: 'final answer', process_text: '' } });
+    // Drain the GET and artifact-reconciliation awaits, not just the synchronous reducer.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.getRun).toHaveBeenCalledWith(run.id);
+    expect(mocks.fetchRunArtifacts).toHaveBeenCalledWith(run.id);
+    expect(useRunChatStore.getState().conversations[11].messages[1]).toMatchObject({ content: 'final answer', processText: '', status: 'done' });
+  });
+
   it('does not clear newer C when a completed B terminal event is replayed', async () => {
     const b = { ...run, id: 'run-b' };
     mocks.createRun.mockResolvedValueOnce(b);
@@ -361,7 +384,7 @@ describe('run stream ownership', () => {
     oldHandlers.onEvent(delta);
     expect(useRunChatStore.getState().conversations[11].messages[1].content).toBe('');
     mocks.openRunStream.mock.calls[1][1].onEvent(delta);
-    expect(useRunChatStore.getState().conversations[11].messages[1].content).toBe('live answer');
+    expect(useRunChatStore.getState().conversations[11].messages[1]).toMatchObject({ content: '', processText: 'live answer' });
   });
 
   it('shares one subscription on idempotent replay and closes every opened handle', async () => {

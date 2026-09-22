@@ -12,10 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/shilin414/cas/backend-go/internal/businessapps"
 	"github.com/shilin414/cas/backend-go/internal/catalog"
+	"github.com/shilin414/cas/backend-go/internal/feishucard"
 	"github.com/shilin414/cas/backend-go/internal/identity"
-	"github.com/go-chi/chi/v5"
 )
 
 type queryForwardTarget struct {
@@ -144,7 +145,14 @@ func (s *Server) forwardBusinessQuery(w http.ResponseWriter, r *http.Request) {
 	if sender == "" {
 		sender = caller.Username
 	}
-	card, _ := json.Marshal(businessapps.QueryResultCard(snapshot, sender, link))
+	prepared, prepareErr := feishucard.Prepare(businessapps.QueryResultCardOptions(snapshot, sender, link))
+	if prepareErr != nil {
+		writeDetail(w, 500, "卡片生成失败")
+		return
+	}
+	if prepared.Downgraded && s.Log != nil {
+		s.Log.Warn("query card conversion failed; using plain preview", "application_id", app.ID)
+	}
 	results := make([]queryForwardResult, len(input.Targets))
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, 4)
@@ -159,7 +167,7 @@ func (s *Server) forwardBusinessQuery(w http.ResponseWriter, r *http.Request) {
 				results[index] = queryForwardResult{TargetID: target.ID, TargetType: target.Type, Error: "本次未发送，请重试该目标"}
 				return
 			}
-			results[index] = s.sendBusinessQueryTarget(ctx, snapshot, target, uat, string(card))
+			results[index] = s.sendBusinessQueryTarget(ctx, snapshot, target, uat, prepared.Content, prepared.Fallback)
 		}(index, target)
 	}
 	wg.Wait()
@@ -174,7 +182,7 @@ func (s *Server) forwardBusinessQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"results": results, "success_count": success, "fail_count": len(results) - success})
 }
-func (s *Server) sendBusinessQueryTarget(ctx context.Context, snapshot *businessapps.QuerySnapshot, target queryForwardTarget, uat, card string) queryForwardResult {
+func (s *Server) sendBusinessQueryTarget(ctx context.Context, snapshot *businessapps.QuerySnapshot, target queryForwardTarget, uat, card string, fallbackCards ...string) queryForwardResult {
 	result := queryForwardResult{TargetID: target.ID, TargetType: target.Type}
 	targetKey := target.Type + ":" + target.ID
 	state, lease, e := s.BusinessSnapshots.Claim(ctx, snapshot.Token, targetKey)
@@ -204,7 +212,17 @@ func (s *Server) sendBusinessQueryTarget(ctx context.Context, snapshot *business
 		receiveType = "chat_id"
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	e = s.Feishu.SendIMMessageWithUUID(sendCtx, uat, receiveType, target.ID, "interactive", card, businessapps.QuerySendUUID(snapshot.Token, targetKey))
+	legacy := ""
+	if len(fallbackCards) > 0 {
+		legacy = fallbackCards[0]
+	}
+	fallback, sendErr := identity.SendCardWithFallback(sendCtx, card, legacy, func(attemptCtx context.Context, content string) error {
+		return s.Feishu.SendIMMessageWithUUID(attemptCtx, uat, receiveType, target.ID, "interactive", content, businessapps.QuerySendUUID(snapshot.Token, targetKey))
+	})
+	e = sendErr
+	if fallback && s.Log != nil {
+		s.Log.Warn("query card downgraded to plain preview", "application_id", snapshot.ApplicationID, "fallback_sent", e == nil)
+	}
 	cancel()
 	result.OK = e == nil
 	outcome := "sent"

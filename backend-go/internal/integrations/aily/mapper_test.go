@@ -166,3 +166,58 @@ func TestStreamEventNameSwitching(t *testing.T) {
 	}
 	var _ = json.Marshal
 }
+
+func TestGalleryArtifactKeepsDirectoryIdentity(t *testing.T) {
+	result := map[string]any{"content": []any{
+		map[string]any{"text": "![snow](artifacts/landscape_gallery/snow.jpg) ![forest](artifacts/landscape_gallery/forest.jpg) ![chart](artifacts/chart.png)"},
+		map[string]any{"agent_artifact_id": "gallery", "artifact_type": "sandbox_gallery"},
+		map[string]any{"agent_artifact_id": "chart", "artifact_type": "sandbox_file"},
+	}}
+	arts := (Mapper{}).ExtractArtifacts(result)
+	if len(arts) != 2 || arts[0].Name != "landscape_gallery" || arts[1].Name != "chart.png" {
+		t.Fatalf("wrong gallery pairing: %+v", arts)
+	}
+}
+
+// Shape reproduced from the affected completed Aily chat: earlier content
+// entries are progress messages; the last text entry is the user-facing reply.
+func TestExtractFinalTextDoesNotConcatenateExecutionProcess(t *testing.T) {
+	result := map[string]any{"status": "Completed", "content": []any{
+		map[string]any{"type": "text", "text": "我先获取权限清单、SQL规范和指标定义。"},
+		map[string]any{"type": "text", "text": "权限校验和SQL规范已获取。现在执行权限查询。"},
+		map[string]any{"type": "text", "text": "已获取权限，正在加载字段定义。"},
+		map[string]any{"type": "text", "text": "正在检查维度归属。"},
+		map[string]any{"type": "text", "text": "已确定查询维度。"},
+		map[string]any{"type": "text", "text": "正在执行查询。"},
+		map[string]any{"type": "text", "text": "查询完成。\n\n#### 销售情况\n\n| 数量 | 金额 |\n|---|---|\n| 10 | 100 |"},
+	}}
+	want := "查询完成。\n\n#### 销售情况\n\n| 数量 | 金额 |\n|---|---|\n| 10 | 100 |"
+	if got := (Mapper{}).ExtractFinalText(result); got != want {
+		t.Fatalf("execution process leaked into final reply: got %q, want %q", got, want)
+	}
+}
+
+func TestSplitResponseTextPreservesBoundaries(t *testing.T) {
+	cases := []struct {
+		name           string
+		status         string
+		items          []any
+		final, process string
+	}{
+		{"one answer keeps all paragraphs", "Completed", []any{map[string]any{"type": "text", "text": "先获取权限也可以是用户要求的答案。\n\n第二段\n![图](artifacts/a.png)"}}, "先获取权限也可以是用户要求的答案。\n\n第二段\n![图](artifacts/a.png)", ""},
+		{"progress separated from last text with trailing artifacts", "Completed", []any{map[string]any{"type": "text", "text": "过程一"}, map[string]any{"type": "text", "text": "过程二"}, map[string]any{"type": "text", "text": "答案 ![a](artifacts/a.png) ![b](artifacts/b.png)"}, map[string]any{"type": "image", "agent_artifact_id": "gallery", "artifact_type": "sandbox_gallery"}}, "答案 ![a](artifacts/a.png) ![b](artifacts/b.png)", "过程一\n\n过程二"},
+		{"malformed and blank items ignored", "Completed", []any{nil, 42, map[string]any{"type": "text", "text": 42}, map[string]any{"type": "tool", "text": "tool log"}, map[string]any{"type": "text", "text": "答案"}, map[string]any{"type": "text", "text": " "}}, "答案", ""},
+		{"no text", "Completed", []any{}, "", ""},
+		{"failed result is only process", "Failed", []any{map[string]any{"type": "text", "text": "未完成内容"}}, "", "未完成内容"},
+		{"cancelled result is only process", "Cancelled", []any{map[string]any{"type": "text", "text": "未完成内容"}}, "", "未完成内容"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := map[string]any{"status": tc.status, "content": tc.items}
+			final, process := (Mapper{}).SplitResponseText(result)
+			if final != tc.final || process != tc.process {
+				t.Fatalf("got (%q,%q), want (%q,%q)", final, process, tc.final, tc.process)
+			}
+		})
+	}
+}

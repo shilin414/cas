@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,12 +13,12 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/go-chi/chi/v5"
 	"github.com/shilin414/cas/backend-go/internal/businessapps"
 	"github.com/shilin414/cas/backend-go/internal/catalog"
 	"github.com/shilin414/cas/backend-go/internal/execution"
 	"github.com/shilin414/cas/backend-go/internal/identity"
 	"github.com/shilin414/cas/backend-go/internal/platform/config"
-	"github.com/go-chi/chi/v5"
 )
 
 type fakeQuerySnapshots struct {
@@ -328,5 +329,61 @@ func TestQuerySnapshotAssignedACLGrantAndRevocation(t *testing.T) {
 	}
 	if e := mock.ExpectationsWereMet(); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestQueryFallbackKeepsUUIDAndFinalOutcome(t *testing.T) {
+	for _, uncertain := range []bool{false, true} {
+		t.Run(fmt.Sprintf("uncertain=%v", uncertain), func(t *testing.T) {
+			snapshot := querySnapshot(t)
+			store := &fakeQuerySnapshots{snapshot: snapshot}
+			calls := 0
+			uuid := ""
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				var request struct{ UUID, Content string }
+				_ = json.NewDecoder(r.Body).Decode(&request)
+				if request.UUID == "" {
+					t.Error("missing UUID")
+				}
+				if uuid == "" {
+					uuid = request.UUID
+				} else if uuid != request.UUID {
+					t.Error("UUID changed on fallback")
+				}
+				if calls == 1 {
+					if request.Content != "native" {
+						t.Error("wrong first payload")
+					}
+					w.WriteHeader(400)
+					_, _ = w.Write([]byte(`{"code":230099,"msg":"invalid card"}`))
+					return
+				}
+				if request.Content != "legacy" {
+					t.Error("wrong fallback payload")
+				}
+				if uncertain {
+					connection, _, _ := w.(http.Hijacker).Hijack()
+					_ = connection.Close()
+					return
+				}
+				_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
+			}))
+			defer upstream.Close()
+			s := &Server{BusinessSnapshots: store, Feishu: identity.NewFeishuClient(upstream.URL, "id", "secret", upstream.Client())}
+			target := queryForwardTarget{ID: "ou-test", Type: "user"}
+			first := s.sendBusinessQueryTarget(context.Background(), snapshot, target, "uat", "native", "legacy")
+			second := s.sendBusinessQueryTarget(context.Background(), snapshot, target, "uat", "native", "legacy")
+			if calls != 2 {
+				t.Fatalf("unexpected resend: %d", calls)
+			}
+			if uncertain {
+				if first.OK || second.OK || !strings.Contains(second.Error, "不再") {
+					t.Fatalf("lost uncertainty: %+v %+v", first, second)
+				}
+			} else if !first.OK || !second.OK || !second.AlreadySent {
+				t.Fatalf("lost sent status: %+v %+v", first, second)
+			}
+		})
 	}
 }

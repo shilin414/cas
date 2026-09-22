@@ -91,3 +91,35 @@ func TestResultShareFailsClosed(t *testing.T) {
 		t.Fatal("ownerless run accepted")
 	}
 }
+
+type resultAgentRepo struct {
+	resultRepo
+	name  string
+	reads int
+}
+
+func (f *resultAgentRepo) GetApplicationByID(context.Context, uint64) (db.GetApplicationByIDRow, error) {
+	f.reads++
+	return db.GetApplicationByIDRow{Name: f.name, Icon: "✨", AvatarKey: "application-avatars/1/old.png"}, nil
+}
+func TestResultSharePinsAgentIdentityOnce(t *testing.T) {
+	repo := &resultAgentRepo{name: "原智能体"}
+	run := resultRun()
+	run.ApplicationID = sql.NullInt64{Int64: 1, Valid: true}
+	first, err := EnsureResult(context.Background(), repo, run, "任务")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.name = "后来改名"
+	second, err := EnsureResult(context.Background(), repo, run, "任务")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []Entry
+	if err := json.Unmarshal(second.Snapshot, &entries); err != nil {
+		t.Fatal(err)
+	}
+	if entries[0].AgentName != "原智能体" || repo.reads != 1 || string(first.Snapshot) != string(second.Snapshot) {
+		t.Fatalf("identity changed in historical share: %s reads=%d", second.Snapshot, repo.reads)
+	}
+}

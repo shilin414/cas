@@ -1024,7 +1024,7 @@ func modeOrDefault(run *execution.Run) string {
 func (e *Executor) finalizeFromResult(ctx context.Context, claimed *execution.ClaimedRun, chatResult map[string]any) error {
 	run := claimed.Run
 	mapper := e.Adapter.mapper()
-	finalText := mapper.ExtractFinalText(chatResult)
+	finalText, processText := mapper.SplitResponseText(chatResult)
 	for _, art := range mapper.ExtractArtifacts(chatResult) {
 		if err := e.recordArtifact(ctx, claimed, map[string]any{
 			"external_artifact_id":   art.ExternalID,
@@ -1042,6 +1042,7 @@ func (e *Executor) finalizeFromResult(ctx context.Context, claimed *execution.Cl
 	in := &execution.FinishInput{
 		ProviderStatus: providerStatus,
 		FinishReason:   finishReason,
+		Output:         map[string]any{"text": finalText, "process_text": processText, "status": providerStatus},
 	}
 	switch mapped {
 	case "failed":
@@ -1051,18 +1052,19 @@ func (e *Executor) finalizeFromResult(ctx context.Context, claimed *execution.Cl
 		in.ErrorMessage = msg
 	case "cancelled":
 		in.Status = execution.StatusCancelled
-		in.Output = map[string]any{"text": finalText, "status": providerStatus}
 	default:
 		in.Status = execution.StatusSucceeded
-		in.Output = map[string]any{"text": finalText, "status": providerStatus}
 	}
 	// Assistant message durability (修复计划 §32): the message is part of
 	// the finalize transaction — a succeeded run can never lose its answer.
 	if finalText != "" && run.ConversationID != nil {
 		in.AssistantText = finalText
-		meta, err := e.assistantMetadata(ctx, run)
-		if err == nil {
-			in.AssistantMetadata = meta
+		meta, err := e.assistantMetadata(ctx, run, processText)
+		// Artifact enrichment is optional; never discard canonical process/run
+		// metadata when its lookup fails.
+		in.AssistantMetadata = meta
+		if err != nil {
+			e.Log.Warn("assistant artifact summaries unavailable", "run_id", run.ID.String(), "err", err)
 		}
 	}
 	return e.Owned.Finalize(ctx, claimed, in)
@@ -1071,14 +1073,19 @@ func (e *Executor) finalizeFromResult(ctx context.Context, claimed *execution.Cl
 // assistantMetadata builds the assistant message metadata with artifact
 // summaries for history replay (same shape as before the closure, but the
 // message itself is now written inside the finalize transaction).
-func (e *Executor) assistantMetadata(ctx context.Context, run *execution.Run) (json.RawMessage, error) {
+func (e *Executor) assistantMetadata(ctx context.Context, run *execution.Run, processText string) (json.RawMessage, error) {
+	meta := map[string]any{
+		"run_id":       run.ID.String(),
+		"provider":     ProviderKey,
+		"process_text": processText,
+	}
 	artifacts, err := e.Owned.ListRunArtifacts(ctx, run.ID)
 	if err != nil {
-		return nil, err
-	}
-	meta := map[string]any{
-		"run_id":   run.ID.String(),
-		"provider": ProviderKey,
+		base, marshalErr := json.Marshal(meta)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		return base, err
 	}
 	if len(artifacts) > 0 {
 		summaries := make([]map[string]any, 0, len(artifacts))

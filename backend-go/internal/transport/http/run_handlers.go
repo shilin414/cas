@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -728,7 +730,7 @@ func artifactJSON(a db.RunArtifact) map[string]any {
 // 302 by default, so allow a short private cache: after it expires the
 // /open call still hits the 23h DB cache (no provider round-trip), and the
 // signed target URL itself is valid for 24h.
-func (s *Server) OpenArtifact(w http.ResponseWriter, r *http.Request, artifactId openapi_types.UUID) {
+func (s *Server) OpenArtifact(w http.ResponseWriter, r *http.Request, artifactId openapi_types.UUID, _ genapi.OpenArtifactParams) {
 	caller := userFrom(r.Context())
 	if caller == nil {
 		writeDetail(w, http.StatusUnauthorized, "Authentication credentials were not provided.")
@@ -766,8 +768,7 @@ func (s *Server) serveArtifactRedirect(w http.ResponseWriter, r *http.Request, r
 	now := time.Now().UTC()
 	if row.CachedExternalUrl.String != "" && row.CachedUrlExpiresAt.Valid &&
 		row.CachedUrlExpiresAt.Time.After(now.Add(25*time.Minute)) {
-		w.Header().Set("Cache-Control", "private, max-age=1800")
-		http.Redirect(w, r, row.CachedExternalUrl.String, http.StatusFound)
+		redirectArtifactFile(w, r, row.CachedExternalUrl.String)
 		return
 	}
 
@@ -799,7 +800,7 @@ func (s *Server) serveArtifactRedirect(w http.ResponseWriter, r *http.Request, r
 		_ = s.RateLimitArtifacts.Acquire(r.Context())
 	}
 	ref, err := adapter.ResolveArtifact(r.Context(), authCtx, agentID, row.ExternalArtifactID)
-	if err != nil || ref.URL == "" {
+	if err != nil || ref == nil || ref.URL == "" {
 		writeSimpleError(w, http.StatusBadGateway, "artifact resolution failed")
 		return
 	}
@@ -811,8 +812,27 @@ func (s *Server) serveArtifactRedirect(w http.ResponseWriter, r *http.Request, r
 	if err := s.Runs.Querier().CacheArtifactURL(r.Context(), genCacheArtifactParams(ref.URL, expires, name, name, row.ID)); err != nil {
 		s.Log.Warn("cache artifact url failed", "err", err)
 	}
+	redirectArtifactFile(w, r, ref.URL)
+}
+
+// A collection resolver may return only one member. Never rewrite signed URLs or
+// serve that member as another markdown image. Authorization stays in the callers.
+func redirectArtifactFile(w http.ResponseWriter, r *http.Request, target string) {
+	filename := r.URL.Query().Get("filename")
+	if filename != "" {
+		if len(filename) > 255 || filename == "." || filename == ".." || strings.ContainsAny(filename, "/\\\r\n\x00") {
+			writeDetail(w, http.StatusBadRequest, "invalid artifact filename")
+			return
+		}
+		u, err := url.Parse(target)
+		if err != nil || path.Base(u.Path) != filename {
+			w.Header().Set("Cache-Control", "no-store")
+			writeDetail(w, http.StatusNotFound, "the provider did not return this gallery file")
+			return
+		}
+	}
 	w.Header().Set("Cache-Control", "private, max-age=1800")
-	http.Redirect(w, r, ref.URL, http.StatusFound)
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // ListConversationRuns lists a conversation's runs (newest first).

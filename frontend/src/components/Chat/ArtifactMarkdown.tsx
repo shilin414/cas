@@ -9,13 +9,24 @@ import { apiUrl, deploymentAssetUrl } from '@/lib/deploymentPaths';
  * the authenticated endpoint, the public share page the token-scoped one.
  * File bytes are always fetched by the browser straight from the provider.
  */
-import React, { useCallback, useMemo, useState } from 'react';
-import { Spin } from 'antd';
+import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import './ArtifactMarkdown.css';
 
-import { resolveArtifactRef } from './artifactRef';
+import { artifactReferences, resolveArtifactRef } from './artifactRef';
 
 const API_BASE = apiUrl();
+const MARKDOWN_PLUGINS = [remarkGfm];
+
+// Keep the table renderer stable across streaming updates, like artifact images.
+function MarkdownTable({ children }: { children?: React.ReactNode }) {
+  return (
+    <div className="artifact-markdown__table-scroll" role="region" aria-label="表格，可横向滚动" tabIndex={0}>
+      <table>{children}</table>
+    </div>
+  );
+}
 
 /**
  * Stable chat image. A provider artifact URL goes through the /open 302
@@ -25,18 +36,30 @@ const API_BASE = apiUrl();
  * download; the placeholder avoids the browser's broken-image icon while
  * the 302 resolves.
  */
-export const ChatImage: React.FC<{
+interface ChatImageProps {
   src: string;
   alt?: string;
-}> = ({ src, alt }) => {
+}
+
+// Reset both success and failure on source changes, including direct callers.
+// Unchanged sources keep the same subtree during streaming text updates.
+export const ChatImage: React.FC<ChatImageProps> = props => (
+  <ChatImageContent key={props.src} {...props} />
+);
+
+const ChatImageContent: React.FC<ChatImageProps> = ({ src, alt }) => {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   if (failed) {
-    return <span className="chat-img chat-img--broken" title={alt}>{alt || '图片加载失败'}</span>;
+    return <span className="chat-img chat-img--broken" title={alt}>{alt ? `${alt}：` : ''}图片暂不可用（上游未提供该文件或下载失败）</span>;
   }
   return (
     <span className="chat-img">
-      {!loaded && <span className="chat-img__loading"><Spin size="small" /></span>}
+      {!loaded && (
+        <span className="chat-img__loading" role="status" aria-label="图片加载中">
+          <span className="chat-img__spinner" aria-hidden="true" />
+        </span>
+      )}
       <img
         src={src}
         alt={alt || ''}
@@ -53,17 +76,51 @@ export interface ArtifactRef {
   name: string;
 }
 
+const ArtifactRenderContext = createContext<{
+  resolveArtifactSrc: (src: string) => string | null;
+  pending: boolean;
+}>({ resolveArtifactSrc: () => null, pending: false });
+
+function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+  const { resolveArtifactSrc, pending } = useContext(ArtifactRenderContext);
+  if (typeof src !== 'string') return <img src={src} alt={alt || ''} loading="lazy" />;
+  if (/^(https?:|data:|blob:|\/api\/)/i.test(src)) {
+    return <ChatImage src={deploymentAssetUrl(src)} alt={alt} />;
+  }
+  const resolved = resolveArtifactSrc(src);
+  return resolved
+    ? <ChatImage src={resolved} alt={alt} />
+    : <span className={'chat-img chat-img--' + (pending ? 'pending' : 'broken')} title={src}>{pending ? (alt || '生成产物') : (alt || '图片') + '：回复未提供可用的文件引用'}</span>;
+}
+
+function MarkdownLink({ href, children, node: _node, ...rest }: any) {
+  const { resolveArtifactSrc } = useContext(ArtifactRenderContext);
+  return (
+    <a
+      {...rest}
+      href={typeof href === 'string' ? (resolveArtifactSrc(href) ?? deploymentAssetUrl(href)) : href}
+      target="_blank"
+      rel="noreferrer"
+    >{children}</a>
+  );
+}
+
+const MARKDOWN_COMPONENTS = { table: MarkdownTable, img: MarkdownImage, a: MarkdownLink };
+
 export const MarkdownWithArtifacts: React.FC<{
   content: string;
   artifacts?: ArtifactRef[];
   /** Override the resolver target (public shares use the token-scoped one). */
   openArtifactUrl?: (artifactId: string) => string;
-}> = ({ content, artifacts, openArtifactUrl }) => {
+  pending?: boolean;
+}> = ({ content, artifacts, openArtifactUrl, pending = false }) => {
   const defaultResolveUrl = useCallback(
     (artifactId: string) => `${API_BASE}/v2/artifacts/${artifactId}/open`,
     [],
   );
   const resolveUrl = openArtifactUrl ?? defaultResolveUrl;
+  const referencesKey = JSON.stringify(artifactReferences(content));
+  const references = useMemo(() => JSON.parse(referencesKey) as string[], [referencesKey]);
 
   /**
    * Matched /open URL, or null when the ref is still unresolved. The matching
@@ -72,47 +129,20 @@ export const MarkdownWithArtifacts: React.FC<{
    * why only the first of two generated images appeared.
    */
   const resolveArtifactSrc = useCallback(
-    (src: string): string | null => resolveArtifactRef(src, artifacts, resolveUrl),
-    [artifacts, resolveUrl]);
+    (src: string): string | null => resolveArtifactRef(src, artifacts, resolveUrl, references),
+    [artifacts, resolveUrl, references]);
 
-  // Stable component identities: ReactMarkdown's `components` prop is a
-  // render-time lookup table, and an inline object would give every <img> a
-  // NEW component type on each parent render — unmounting and remounting the
-  // ChatImage subtree, restarting the 302 → CDN download on every content
-  // delta. Memoized on artifacts only, so streaming text updates never
-  // change it.
-  const components = useMemo(() => ({
-    img: ({ src, alt }: { src?: string; alt?: string }) => {
-      if (typeof src !== 'string') {
-        return <img src={src} alt={alt || ''} loading="lazy" />;
-      }
-      if (/^(https?:|data:|blob:|\/api\/)/i.test(src)) {
-        return <ChatImage src={deploymentAssetUrl(src)} alt={alt} />;
-      }
-      const resolved = resolveArtifactSrc(src);
-      // Unknown artifact ref: placeholder, never a broken <img> that
-      // flickers into place once artifact.discovered lands.
-      return resolved
-        ? <ChatImage src={resolved} alt={alt} />
-        : <span className="chat-img chat-img--pending" title={src}>{alt || '生成产物'}</span>;
-    },
-    a: ({ href, children, ...rest }: any) => (
-      <a
-        href={typeof href === 'string'
-          ? (resolveArtifactSrc(href) ?? deploymentAssetUrl(href))
-          : href}
-        target="_blank"
-        rel="noreferrer"
-        {...rest}
-      >
-        {children}
-      </a>
-    ),
-  }), [resolveArtifactSrc]);
+  // New artifacts update resolver data, not renderer identity: already loaded
+  // image components must survive sibling discovery without another download.
+  const renderContext = useMemo(() => ({ resolveArtifactSrc, pending }), [resolveArtifactSrc, pending]);
 
   return (
-    <ReactMarkdown components={components}>
-      {content}
-    </ReactMarkdown>
+    <ArtifactRenderContext.Provider value={renderContext}>
+      <div className="artifact-markdown">
+        <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={MARKDOWN_COMPONENTS}>
+          {content}
+        </ReactMarkdown>
+      </div>
+    </ArtifactRenderContext.Provider>
   );
 };

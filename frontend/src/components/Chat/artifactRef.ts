@@ -26,54 +26,59 @@ export function stripExt(name: string): string {
   return i > 0 ? name.slice(0, i).toLowerCase() : name.toLowerCase();
 }
 
-/**
- * Maps a markdown image/link target to an artifact's /open URL.
- *
- * Returns null when nothing matches, so the caller renders a placeholder
- * rather than a broken <img> that would flicker into place once
- * artifact.discovered lands.
- *
- * NOTE the capture group is `(.+)`, NOT `([^/]+)`: the earlier
- * single-segment form dropped everything after the first directory, so any
- * nested ref failed to resolve. That is precisely why a multi-image answer
- * showed its first (flat-path) image and not its second.
+/** Extract sandbox refs only; these are identifiers, never arbitrary fetch URLs. */
+export function artifactReferences(content: string): string[] {
+  return Array.from(content.matchAll(/\((\.?\/?artifacts?\/[^)\s]+)\)/gi), match => match[1]);
+}
+
+function refParts(src: string): { group: string; file: string } | null {
+  const path = src.replace(/^\.?\/?/, '').split(/[?#]/)[0];
+  const match = path.match(/^artifacts?\/(.+)$/i);
+  if (!match) return null;
+  try {
+    const segments = match[1].split('/').filter(Boolean).map(decodeURIComponent);
+    if (segments.some(segment =>
+      segment === '..' || /[\\/]/.test(segment)
+      || Array.from(segment).some(char => char.charCodeAt(0) < 32)
+    )) return null;
+    return { group: segments[0] || '', file: segments[segments.length - 1] || '' };
+  } catch { return null; }
+}
+
+/** Exact files outrank directory aliases. Multi-file groups preserve the filename
+ * on /open so a provider returning only ONE gallery member cannot substitute it
+ * for every image. Historical snapshots may name that gallery after its first file.
  */
 export function resolveArtifactRef(
   src: string,
   artifacts: ArtifactRefName[] | undefined,
   resolveUrl: (artifactId: string) => string,
+  references: string[] = [],
 ): string | null {
-  const path = src.replace(/^\.?\/?/, '').split(/[?#]/)[0];
-
-  const match = path.match(/^artifacts?\/(.+)$/i);
-  if (match) {
-    const segments = match[1].split('/').filter(Boolean);
-    const refName = decodeURIComponent(segments[0] ?? '');
-    const refFile = decodeURIComponent(segments[segments.length - 1] ?? '');
-    const hit = (artifacts || []).find((a) => {
-      const full = a.name || '';
-      const base = full.split(/[\\/]/).pop() || '';
-      return (
-        full === refName ||
-        full === refFile ||
-        base === refName ||
-        base === refFile ||
-        // Name that still matches after dropping the extension: the
-        // provider may strip .png from the ref but keep it in the name.
-        stripExt(base) === stripExt(refName) ||
-        stripExt(base) === stripExt(refFile) ||
-        (full !== '' && full.startsWith(refName))
-      );
-    });
-    if (hit) return resolveUrl(hit.artifactId);
+  const items = artifacts || [];
+  const base = (a: ArtifactRefName) => (a.name || '').split(/[\\/]/).pop() || '';
+  const ref = refParts(src);
+  if (ref) {
+    const peers = references.map(refParts).filter(p => p?.group === ref.group);
+    const filenames = new Set(peers.map(p => p!.file));
+    const multiple = filenames.size > 1;
+    let hit = items.find(a => base(a) === ref.file)
+      || items.find(a => base(a) && stripExt(base(a)) === stripExt(ref.file))
+      || items.find(a => a.name === ref.group || base(a) === ref.group)
+      || items.find(a => base(a) && stripExt(base(a)) === stripExt(ref.group));
+    if (!hit && multiple) {
+      const groupItems = items.filter(a => filenames.has(base(a)));
+      if (groupItems.length === 1) hit = groupItems[0];
+    }
+    if (!hit) return null;
+    const target = resolveUrl(hit.artifactId);
+    const directory = base(hit) === ref.group && !ref.group.includes('.') && ref.file !== ref.group;
+    return (multiple || directory) && /\.[a-z0-9]+$/i.test(ref.file)
+      ? `${target}${target.includes('?') ? '&' : '?'}filename=${encodeURIComponent(ref.file)}`
+      : target;
   }
-
-  // Also tolerate a bare filename that matches an artifact name exactly.
-  const tail = path.split('/').pop() || '';
-  const bare = (artifacts || []).find(
-    (a) => a.name && (a.name === tail
-      || (a.name || '').split(/[\\/]/).pop() === tail
-      || stripExt((a.name || '').split(/[\\/]/).pop() || '') === stripExt(tail)));
-  if (bare) return resolveUrl(bare.artifactId);
-  return null;
+  if (/^\.?\/?artifacts?\//i.test(src)) return null;
+  const tail = src.split(/[?#]/)[0].split('/').pop() || '';
+  const hit = items.find(a => base(a) && (base(a) === tail || stripExt(base(a)) === stripExt(tail)));
+  return hit ? resolveUrl(hit.artifactId) : null;
 }

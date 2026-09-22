@@ -6,9 +6,13 @@ package delivery
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/shilin414/cas/backend-go/internal/feishucard"
+	"github.com/shilin414/cas/backend-go/internal/identity"
 	"github.com/shilin414/cas/backend-go/internal/platform/ids"
+	"github.com/shilin414/cas/backend-go/internal/platform/storage"
 )
 
 // Channel / identity / content constants (first stage scope).
@@ -49,8 +53,9 @@ type Sender interface {
 
 // DeliveryRequest is one delivery attempt.
 type DeliveryRequest struct {
-	ExecutionID          ids.ID
-	Title, URL, Subtitle string
+	AgentName, AgentIcon, AgentAvatarKey string
+	ExecutionID                          ids.ID
+	Title, URL, Subtitle                 string
 	// SenderUserID is the user whose UAT sends the message.
 	SenderUserID int64
 	Target       Target
@@ -71,8 +76,9 @@ type feishuSender interface {
 
 // FeishuSender sends as the schedule owner via Feishu IM.
 type FeishuSender struct {
-	Client feishuSender
-	Auth   UATResolver
+	Storage storage.Storage
+	Client  feishuSender
+	Auth    UATResolver
 }
 
 // Send implements Sender. receive_id_type follows the target type.
@@ -90,12 +96,33 @@ func (s *FeishuSender) Send(ctx context.Context, req DeliveryRequest) error {
 	if req.Target.Type == TargetChat {
 		idType = "chat_id"
 	}
-	content, err := marshalJSON(feishucard.Build(feishucard.Options{
+	imageKey := ""
+	if req.AgentAvatarKey != "" {
+		if uploader, ok := s.Client.(interface {
+			UploadStoredCardAvatar(context.Context, string, storage.Storage, string) (string, error)
+		}); ok {
+			avatarCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			var avatarErr error
+			imageKey, avatarErr = uploader.UploadStoredCardAvatar(avatarCtx, token, s.Storage, req.AgentAvatarKey)
+			cancel()
+			if avatarErr != nil {
+				slog.Warn("delivery avatar unavailable; using icon fallback")
+			}
+		}
+	}
+	prepared, err := feishucard.Prepare(feishucard.Options{
 		Kind: feishucard.Result, Title: req.Title, Subtitle: req.Subtitle, URL: req.URL,
+		AgentName: req.AgentName, AgentIcon: req.AgentIcon, AgentImageKey: imageKey,
 		Sections: []feishucard.Section{{Label: "结果预览", Text: req.Target.Content}},
-	}))
+	})
 	if err != nil {
 		return fmt.Errorf("delivery: encode preview card: %w", err)
 	}
-	return s.Client.SendIMMessage(ctx, token, idType, req.Target.ID, "interactive", string(content))
+	fallback, err := identity.SendCardWithFallback(ctx, prepared.Content, prepared.Fallback, func(sendCtx context.Context, content string) error {
+		return s.Client.SendIMMessage(sendCtx, token, idType, req.Target.ID, "interactive", content)
+	})
+	if fallback || prepared.Downgraded {
+		slog.Warn("delivery card downgraded to plain preview", "execution_id", req.ExecutionID.String(), "fallback_sent", err == nil)
+	}
+	return err
 }

@@ -47,6 +47,16 @@ func EnsureResult(ctx context.Context, q resultQueries, run db.Run, title string
 		return zero, fmt.Errorf("read result artifacts: %w", err)
 	}
 	entry := Entry{Role: "assistant", Content: &output.Text, Title: title, CreatedAt: run.CreatedAt}
+	// Existing snapshots are returned above without re-reading mutable identity.
+	if lookup, ok := q.(interface {
+		GetApplicationByID(context.Context, uint64) (db.GetApplicationByIDRow, error)
+	}); ok && run.ApplicationID.Valid {
+		if agent, err := lookup.GetApplicationByID(ctx, uint64(run.ApplicationID.Int64)); err == nil {
+			entry.AgentName = agent.Name
+			entry.AgentIcon = agent.Icon
+			entry.AgentAvatarKey = agent.AvatarKey
+		}
+	}
 	if run.FinishedAt.Valid {
 		entry.CreatedAt = run.FinishedAt.Time
 	}

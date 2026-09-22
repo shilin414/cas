@@ -264,7 +264,8 @@ func (w *Worker) send(ctx context.Context, row db.DeliveryExecution) error {
 	execID := ids.ID(row.ID)
 	return w.Sender.Send(ctx, DeliveryRequest{
 		ExecutionID: execID,
-		Title:       entries[0].Title, URL: shareURL, Subtitle: subtitle,
+		AgentName:   entries[0].AgentName, AgentIcon: entries[0].AgentIcon, AgentAvatarKey: entries[0].AgentAvatarKey,
+		Title: entries[0].Title, URL: shareURL, Subtitle: subtitle,
 		SenderUserID:   int64(row.SenderUserID),
 		Target:         Target{Type: row.TargetType, ID: row.TargetID, Content: text},
 		IdempotencyKey: execID.String(),

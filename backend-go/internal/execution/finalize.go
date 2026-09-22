@@ -67,22 +67,7 @@ func (s *Service) FinalizeOwnedRun(ctx context.Context, run *Run, own ExecutionO
 	// appended BEFORE the CAS because the fence predicate requires
 	// status='running' — we hold the row lock and have verified the epoch,
 	// so the CAS below cannot lose.
-	terminalPayload := map[string]any{
-		"status":          in.Status,
-		"provider_status": in.ProviderStatus,
-		"finish_reason":   in.FinishReason,
-	}
-	if in.ErrorCode != "" {
-		terminalPayload["error_code"] = in.ErrorCode
-	}
-	if in.ErrorMessage != "" {
-		terminalPayload["error_message"] = in.ErrorMessage
-	}
-	if output != nil {
-		if t, ok := output["text"].(string); ok && t != "" {
-			terminalPayload["text"] = t
-		}
-	}
+	terminalPayload := finishEventPayload(in)
 	terminalEvent, err := terminalEventName(in.Status)
 	if err != nil {
 		return err
@@ -297,4 +282,30 @@ func terminalEventName(status string) (string, error) {
 func assistantMetadata(runID, provider string) json.RawMessage {
 	raw, _ := json.Marshal(map[string]any{"run_id": runID, "provider": provider})
 	return raw
+}
+
+// finishEventPayload carries canonical text channels into durable SSE replay.
+func finishEventPayload(in *FinishInput) map[string]any {
+	output := in.Output
+	terminalPayload := map[string]any{
+		"status":          in.Status,
+		"provider_status": in.ProviderStatus,
+		"finish_reason":   in.FinishReason,
+	}
+	if in.ErrorCode != "" {
+		terminalPayload["error_code"] = in.ErrorCode
+	}
+	if in.ErrorMessage != "" {
+		terminalPayload["error_message"] = in.ErrorMessage
+	}
+	if output != nil {
+		// Empty process text is authoritative too: it clears a reply that was
+		// provisionally shown in the process while streaming.
+		for _, key := range []string{"text", "process_text"} {
+			if t, ok := output[key].(string); ok {
+				terminalPayload[key] = t
+			}
+		}
+	}
+	return terminalPayload
 }

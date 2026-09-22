@@ -77,3 +77,62 @@ describe('resolveArtifactRef', () => {
     expect(resolve('artifacts/nope.png/a/nope.png')).toBeNull();
   });
 });
+
+const galleryRefs = [
+  'artifacts/landscape_gallery/snow_mountain_lake.jpg',
+  'artifacts/landscape_gallery/forest_sunset.jpg',
+];
+describe('multi-file artifact identity', () => {
+  it('keeps gallery filenames on separate resolver requests', () => {
+    const artifacts = [{artifactId:'gallery', name:'landscape_gallery'}];
+    expect(resolveArtifactRef(galleryRefs[0], artifacts, id => `/open/${id}`, galleryRefs))
+      .toBe('/open/gallery?filename=snow_mountain_lake.jpg');
+    expect(resolveArtifactRef(galleryRefs[1], artifacts, id => `/open/${id}`, galleryRefs))
+      .toBe('/open/gallery?filename=forest_sunset.jpg');
+  });
+  it('handles historical snapshots that incorrectly named a gallery after its first file', () => {
+    const artifacts = [{artifactId:'gallery',name:'snow_mountain_lake.jpg'}];
+    expect(resolveArtifactRef(galleryRefs[1], artifacts, id=>`/open/${id}`, galleryRefs))
+      .toBe('/open/gallery?filename=forest_sunset.jpg');
+  });
+  it('prefers the actual filename over a shared directory label', () => {
+    const artifacts = [{artifactId:'directory',name:'landscape_gallery'},{artifactId:'forest',name:'forest_sunset.jpg'}];
+    expect(resolveArtifactRef(galleryRefs[1],artifacts,id=>`/open/${id}`)).toBe('/open/forest');
+  });
+  it('never uses a shared prefix as proof of file identity', () => {
+    expect(resolveArtifactRef('artifacts/chart/other.png',[{artifactId:'wrong',name:'chart-other.png'}],id=>id)).toBeNull();
+  });
+  it('does not crash on malformed percent escapes', () => {
+    expect(resolveArtifactRef('artifacts/%oops/file.png',[],id=>id)).toBeNull();
+  });
+});
+
+describe('artifact reference validation', () => {
+  it.each(Array.from({ length: 32 }, (_, code) => code))('rejects raw and encoded control character %i in every path position', code => {
+    const control = String.fromCharCode(code);
+    const encoded = `%${code.toString(16).padStart(2, '0')}`;
+    for (const value of [control, encoded]) {
+      for (const src of [
+        `artifacts/bad${value}/chart.png`,
+        `artifacts/chart.png/bad${value}/chart.png`,
+        `artifacts/chart.png/bad${value}.png`,
+      ]) expect(resolve(src)).toBeNull();
+    }
+  });
+
+  it.each([
+    '..', '%2e%2e', '%2E%2e', '.%2e', '%2e.', '%2f', '%2F', '%5c', '%5C',
+    '..%2fother', '..%5cother', '\\', '%', '%2', '%GG', '%C0%AF',
+  ])('rejects traversal, encoded separators and malformed encoding: %s', segment => {
+    expect(resolve(`artifacts/${segment}/chart.png`)).toBeNull();
+    expect(resolve(`artifacts/chart.png/${segment}/chart.png`)).toBeNull();
+    expect(resolve(`artifacts/chart.png/${segment}`)).toBeNull();
+  });
+
+  it('preserves safe percent-encoded Unicode, spaces and dot-containing names', () => {
+    const name = '报表 chart.v2.png';
+    expect(resolveArtifactRef(`artifacts/output/${encodeURIComponent(name)}`,
+      [{ artifactId: 'safe', name }], id => `/open/${id}`)).toBe('/open/safe');
+    expect(resolve('artifacts/output/report%2epng')).toBe('/open/art-nested');
+  });
+});
