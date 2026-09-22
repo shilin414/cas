@@ -5,7 +5,7 @@
  * Bootstrap resolves the default agent; explicit selection resolves one entity.
  * Historical conversation deep links still open the owning chat workspace.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Button, Empty, Spin, message } from 'antd';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { routeForApplication } from '@/lib/applicationRoute';
@@ -60,6 +60,13 @@ const HomeWorkspace: React.FC = () => {
   const [resolving, setResolving] = useState(false);
   /** Distinguishes "no such conversation/application" from "offline" (P1-6). */
   const [resolveFailed, setResolveFailed] = useState(false);
+
+  // Home is a fresh composer, not the last task's transcript. Reset before
+  // paint on every home navigation, including another click while already here.
+  // Keep cached conversations and their running streams intact.
+  useLayoutEffect(() => {
+    useRunChatStore.getState().setActiveConversation(null);
+  }, [navigationKey]);
 
   useEffect(() => { void loadBootstrap(); }, [loadBootstrap]);
 
