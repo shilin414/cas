@@ -42,6 +42,7 @@ SELECT s.id, s.owner_user_id, s.name, s.description, s.application_id,
        s.created_at, s.updated_at, s.deleted_at
 FROM schedules s
 WHERE s.owner_user_id = ?
+  AND (sqlc.narg(application_id) IS NULL OR s.application_id = sqlc.narg(application_id))
   AND s.deleted_at IS NULL
   AND CASE
         WHEN sqlc.arg('status') = 'running' THEN s.enabled = 1

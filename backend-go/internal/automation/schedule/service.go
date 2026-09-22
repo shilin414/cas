@@ -391,10 +391,11 @@ func (s *Service) Get(ctx context.Context, id, userID int64, isStaff bool) (*Sch
 
 // ListFilter narrows the owner list.
 type ListFilter struct {
-	Status   string // all | running | paused | failed
-	Query    string // server-side name substring; "" disables the search
-	BeforeID int64
-	Limit    int
+	ApplicationID int64
+	Status        string // all | running | paused | failed
+	Query         string // server-side name substring; "" disables the search
+	BeforeID      int64
+	Limit         int
 }
 
 // ScheduleWithStatus adds list-time derived facts.
@@ -426,6 +427,7 @@ func (s *Service) List(ctx context.Context, userID int64, f ListFilter) ([]Sched
 	}
 	rows, err := s.q(ctx).ListSchedulesByOwner(ctx, db.ListSchedulesByOwnerParams{
 		OwnerUserID:    uint64(userID),
+		ApplicationID:  sql.NullInt64{Int64: f.ApplicationID, Valid: f.ApplicationID > 0},
 		Status:         status,
 		Search:         searchArg,
 		SearchNameLike: likePattern(search),

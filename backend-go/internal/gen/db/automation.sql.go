@@ -1143,6 +1143,7 @@ SELECT s.id, s.owner_user_id, s.name, s.description, s.application_id,
        s.created_at, s.updated_at, s.deleted_at
 FROM schedules s
 WHERE s.owner_user_id = ?
+  AND (? IS NULL OR s.application_id = ?)
   AND s.deleted_at IS NULL
   AND CASE
         WHEN ? = 'running' THEN s.enabled = 1
@@ -1163,6 +1164,7 @@ LIMIT ?
 
 type ListSchedulesByOwnerParams struct {
 	OwnerUserID    uint64
+	ApplicationID  sql.NullInt64
 	Status         interface{}
 	Search         interface{}
 	SearchNameLike interface{}
@@ -1181,6 +1183,8 @@ type ListSchedulesByOwnerParams struct {
 func (q *Queries) ListSchedulesByOwner(ctx context.Context, arg ListSchedulesByOwnerParams) ([]Schedule, error) {
 	rows, err := q.db.QueryContext(ctx, listSchedulesByOwner,
 		arg.OwnerUserID,
+		arg.ApplicationID,
+		arg.ApplicationID,
 		arg.Status,
 		arg.Status,
 		arg.Status,

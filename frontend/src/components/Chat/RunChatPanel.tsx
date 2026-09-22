@@ -8,9 +8,10 @@
  * via POST /api/v2/applications/{id}/attachments with client-side
  * validation of the provider's official limits.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Dropdown,
   Button,
   Input,
   Modal,
@@ -19,6 +20,9 @@ import {
   message as antdMessage,
 } from 'antd';
 import {
+  ArrowUpOutlined,
+  PlusOutlined,
+  ThunderboltOutlined,
   CheckOutlined,
   CopyOutlined,
   ExportOutlined,
@@ -122,8 +126,11 @@ export interface RunChatPanelProps {
   /** Restore the message list scroll offset of this workspace (§29). */
   initialScrollTop?: number;
   onScrollTopChange?: (scrollTop: number) => void;
-  /** Replace the default empty state (home workspace shows shortcuts). */
+  /** Replace the default empty state (home workspace shows agent identity). */
   emptyState?: React.ReactNode;
+  /** Desktop idle home only: inline composer followed by agent-scoped collections. */
+  homeWorkspace?: boolean;
+  afterComposer?: React.ReactNode;
 }
 
 const RunChatPanel: React.FC<RunChatPanelProps> = ({
@@ -141,6 +148,8 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
   initialScrollTop,
   onScrollTopChange,
   emptyState,
+  homeWorkspace = false,
+  afterComposer,
 }) => {
   const { user } = useAuthStore();
   const {
@@ -151,6 +160,7 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
     sendMessage,
     clearError,
   } = useRunChatStore();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [inputValue, setInputValue] = useState(draftText || '');
   const [sending, setSending] = useState(false);
   // The composer's agent identity no longer comes from a catalog mirror
@@ -647,10 +657,19 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
   };
 
   const isEmpty = messages.length === 0;
+  const desktopHome = homeWorkspace && !isMobile && isEmpty && !isLoading && !conversationId;
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    if (!desktopHome) { textarea.style.height = ''; textarea.style.overflowY = ''; return; }
+    textarea.style.height = '0px';
+    textarea.style.height = `${Math.min(240, Math.max(76, textarea.scrollHeight))}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 240 ? 'auto' : 'hidden';
+  }, [desktopHome, inputValue]);
   const readyCount = pendingUploads.filter((u) => u.state === 'ready').length;
 
   return (
-    <div className="chat-container">
+    <div className={`chat-container${desktopHome ? " agent-home-surface" : ""}`}>
       {error && (
         <div className="run-chat-error-banner">
           <Alert message={error} type="error" showIcon closable onClose={clearError} />
@@ -776,30 +795,42 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
             <div className="run-chat-input-row">
               <button
                 className="run-chat-clip"
+                aria-label="添加附件"
                 disabled={!supportsAttachment || sending || streaming}
                 title={supportsAttachment
                   ? `添加附件（png/jpg/pdf，单轮最多 ${ATTACHMENT_LIMITS.maxPerRun} 个）`
                   : '当前应用不支持附件'}
                 onClick={() => fileInputRef.current?.click()}
               >
-                <PaperClipOutlined />
+                {desktopHome ? <PlusOutlined /> : <PaperClipOutlined />}
               </button>
+              {desktopHome && availableSkills.length > 0 && <Dropdown trigger={["click"]} menu={{
+                selectable: true, multiple: true, selectedKeys: selectedSkills.map(skill => skill.id),
+                items: availableSkills.map(skill => ({key: skill.id, label: skill.name})),
+                onClick: ({key}) => {
+                  const ids = selectedSkills.map(skill => skill.id);
+                  handleSkillChange(ids.includes(key) ? ids.filter(id => id !== key) : [...ids, key]);
+                },
+              }}><button type="button" className="agent-home-skill" disabled={sending || streaming}><ThunderboltOutlined /> {skillButtonLabel(selectedSkills)}</button></Dropdown>}
               <textarea
+                ref={textareaRef}
                 value={inputValue}
                 onChange={(e) => updateInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={streaming ? '执行中…' : (conversationId ? '继续描述需求或补充要求' : '描述你的任务或问题')}
-                rows={1}
+                placeholder={streaming ? '执行中…' : (conversationId ? '继续描述需求或补充要求' : desktopHome ? '输入你的任务或目标…' : '描述你的任务或问题')}
+                aria-label="任务内容"
+                rows={desktopHome ? 3 : 1}
                 disabled={sending || streaming}
                 className="run-chat-textarea"
               />
               <button
                 className="run-chat-send"
+                aria-label="发送任务"
                 disabled={!inputValue.trim() || sending || streaming
                   || (!effectiveApplicationId && bootstrapLoading)}
                 onClick={() => void handleSend()}
               >
-                <SendOutlined />
+                {desktopHome ? <ArrowUpOutlined /> : <SendOutlined />}
               </button>
             </div>
             <div className="run-chat-hint">
@@ -815,6 +846,8 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
           )}
         </div>
       </div>
+
+      {desktopHome && afterComposer}
 
       <Modal
         open={!!shareResult}

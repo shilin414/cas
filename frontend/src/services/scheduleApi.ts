@@ -15,8 +15,10 @@ export async function fetchSchedules(
   beforeId?: number,
   limit = 50,
   q?: string,
+  applicationId?: number,
 ): Promise<Schedule[]> {
   const params: Record<string, number | string> = { limit, status };
+  if (applicationId) params.application_id = applicationId;
   if (beforeId) params.before_id = beforeId;
   const needle = q?.trim();
   if (needle) params.q = needle;

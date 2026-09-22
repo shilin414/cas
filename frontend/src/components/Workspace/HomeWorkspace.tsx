@@ -1,17 +1,12 @@
 /**
- * HomeWorkspace — the idle Main Workspace (§4/§5).
- *
- * It is a Workspace Shell, not a "main agent page": nothing is created until
- * the user actually sends the first message or opens an application, so an
- * idle visit produces no Conversation, no Run and no provider session.
- *
- * Data (执行报告 §9.2/§13/§14, P1-1/P1-2): the default agent and the shortcut
- * groups come from the constant-size workspace bootstrap, a conversation deep
- * link resolves ONE application by id, and `@mention` routing asks the server
- * for its candidates. None of those needs the whole catalog any more.
+ * Agent landing workspace. Selecting a chat agent stays on the desktop home;
+ * fixed applications retain their existing routes. Merely visiting or selecting
+ * creates no conversation or run: creation remains lazy, on the first send.
+ * Bootstrap resolves the default agent; explicit selection resolves one entity.
+ * Historical conversation deep links still open the owning chat workspace.
  */
-import React, { useEffect, useState } from 'react';
-import { Button, Empty, Spin } from 'antd';
+import React, { useEffect, useRef, useState } from 'react';
+import { Button, Empty, Spin, message } from 'antd';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { routeForApplication } from '@/lib/applicationRoute';
 import { api } from '@/services/api';
@@ -20,9 +15,11 @@ import type { SendDecision } from '@/components/Chat/RunChatPanel';
 import { useWorkspaceBootstrapStore } from '@/stores/useWorkspaceBootstrapStore';
 import { useApplicationEntityStore } from '@/stores/useApplicationEntityStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
-import type { ApplicationSummary } from '@/services/runApi';
+import type { ApplicationSummary, ComposerApplication } from '@/services/runApi';
 import WorkbenchHome from '@/workbench/home/WorkbenchHome';
-import { useRecentCapabilities } from '@/workbench/capability/useRecentCapabilities';
+import AgentWorkspaceCollections from '@/workbench/home/AgentWorkspaceCollections';
+import { useRunChatStore } from '@/stores/useRunChatStore';
+import { useIsMobile } from '@/shell/useIsMobile';
 import './HomeWorkspace.css';
 
 const HomeWorkspace: React.FC = () => {
@@ -34,8 +31,12 @@ const HomeWorkspace: React.FC = () => {
   const bootstrapLoading = useWorkspaceBootstrapStore((state) => state.isLoading);
   const loadBootstrap = useWorkspaceBootstrapStore((state) => state.load);
   const defaultApplication = useWorkspaceBootstrapStore((state) => state.defaultApplication);
-  const recentCapabilities = useRecentCapabilities(8);
-  const recommended = useWorkspaceBootstrapStore((state) => state.recommended);
+  const isMobile = useIsMobile();
+  const [selectedApplication, setSelectedApplication] = useState<ComposerApplication | null>(null);
+  const selectionVersion = useRef(0);
+  useEffect(() => () => { selectionVersion.current++; }, []);
+  const currentApplication = selectedApplication ?? defaultApplication;
+  const drafts = useRef<Record<number, string>>({});
   const ensureApplication = useApplicationEntityStore((state) => state.ensure);
   const openApplication = useWorkspaceStore((state) => state.openApplication);
   const rememberConversation = useWorkspaceStore((state) => state.rememberConversation);
@@ -102,9 +103,21 @@ const HomeWorkspace: React.FC = () => {
     content: raw,
   });
 
-  const openApplicationWorkspace = (application: ApplicationSummary) => {
-    openApplication(application.id);
-    navigate(routeForApplication(application));
+  const openApplicationWorkspace = async (application: ApplicationSummary) => {
+    const version = ++selectionVersion.current;
+    if (isMobile || application.kind !== 'chat') {
+      openApplication(application.id);
+      navigate(routeForApplication(application));
+      return;
+    }
+    try {
+      const resolved = await ensureApplication(application.id, { maxAgeMs: 0 });
+      if (version !== selectionVersion.current) return;
+      if (!resolved) { message.error('该智能体暂不可用'); return; }
+      useRunChatStore.getState().setActiveConversation(null);
+      setSelectedApplication(resolved);
+      openApplication(resolved.id);
+    } catch { if (version === selectionVersion.current) message.error('切换智能体失败，请重试'); }
   };
 
   if (resolving) {
@@ -134,24 +147,28 @@ const HomeWorkspace: React.FC = () => {
   return (
     <div className="workspace-host">
       <RunChatPanel
-        applicationId={defaultApplication?.id}
-        application={defaultApplication ?? undefined}
+        key={currentApplication?.id ?? 'loading'}
+        applicationId={currentApplication?.id}
+        homeWorkspace
+        afterComposer={currentApplication && <AgentWorkspaceCollections key={currentApplication.id} applicationId={currentApplication.id} slug={currentApplication.slug} />}
+        draftText={currentApplication ? drafts.current[currentApplication.id] : undefined}
+        onDraftChange={text => { if (currentApplication) drafts.current[currentApplication.id] = text; }}
+        application={currentApplication ?? undefined}
         conversationId={null}
         onRouteSend={handleRouteSend}
         title="今天想完成什么？"
         description="选择一个能力，或直接描述你的任务开始。"
         emptyState={(
           <WorkbenchHome
-            current={defaultApplication}
-            recent={recentCapabilities}
-            recommended={recommended}
+            current={currentApplication}
             onOpen={openApplicationWorkspace}
           />
         )}
         onConversationCreated={(id) => {
-          if (!defaultApplication) return;
-          rememberConversation(defaultApplication.id, id);
-          navigate(`/chat/${defaultApplication.slug}?conversation=${id}`,
+          if (!currentApplication) return;
+          drafts.current[currentApplication.id] = '';
+          rememberConversation(currentApplication.id, id);
+          navigate(`/chat/${currentApplication.slug}?conversation=${id}`,
             { replace: true });
         }}
       />

@@ -155,6 +155,13 @@ func (s *Server) ListSchedules(w http.ResponseWriter, r *http.Request, params ge
 		status = string(*params.Status)
 	}
 	f := schedule.ListFilter{Status: status, Limit: 50}
+	if params.ApplicationId != nil {
+		if *params.ApplicationId <= 0 {
+			writeDetail(w, 400, "application_id must be positive")
+			return
+		}
+		f.ApplicationID = *params.ApplicationId
+	}
 	// Server-side name search (三次复审 §23–§27): the needle reaches the
 	// whole table through the keyset query, so a task on page 2+ is findable.
 	// The runtime length gate (四次复审 P2-6) rejects >200-rune needles as

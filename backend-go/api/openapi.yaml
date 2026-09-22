@@ -56,6 +56,49 @@ tags:
   - name: admin-access
 
 paths:
+  /api/v2/workspace/artifacts:
+    get:
+      operationId: listWorkspaceArtifacts
+      summary: Generated artifacts from the caller's tasks for one application
+      parameters:
+        - name: application_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 200 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        "200":
+          description: Owner-scoped keyset page. Uploaded attachments are excluded.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  next_cursor: { type: string }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, normalized_type, created_at, conversation_id, task_title]
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        normalized_type: { type: string }
+                        created_at: { type: string, format: date-time }
+                        conversation_id: { type: string }
+                        task_title: { type: string }
+        "400": { description: Invalid query or cursor }
+        "401": { description: Not authenticated }
+        "500": { description: Artifact query failed }
   # ─────────────────────────────────────────────────────────── identity ──
   /api/identity/oauth/start:
     get:
@@ -833,6 +876,9 @@ paths:
       tags: [schedules]
       summary: List the caller's schedules (keyset pagination)
       parameters:
+        - name: application_id
+          in: query
+          schema: { type: integer, format: int64, minimum: 1 }
         - name: status
           in: query
           schema: { type: string, enum: [all, running, paused, failed], default: all }

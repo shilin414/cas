@@ -7,11 +7,12 @@ import CapabilityPickerDialog from './CapabilityPickerDialog';
 import CapabilityPickerSheet from './CapabilityPickerSheet';
 import './capability.css';
 
-export default function CapabilityPicker({ open, onClose }: { open: boolean; onClose: () => void }) {
+export default function CapabilityPicker({ open, onClose, onSelect }: { open: boolean; onClose: () => void; onSelect?: (item: ApplicationSummary) => void }) {
   const isMobile = useIsMobile();
   const navigate = useNavigate();
   const openApplication = useWorkspaceStore((state) => state.openApplication);
   const select = (item: ApplicationSummary) => {
+    if (onSelect) { onClose(); onSelect(item); return; }
     openApplication(item.id);
     onClose();
     navigate(routeForApplication(item));

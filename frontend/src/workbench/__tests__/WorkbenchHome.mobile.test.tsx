@@ -14,7 +14,7 @@ describe('WorkbenchHome mobile presentation', () => {
   it('keeps the mobile home focused and leaves recent/recommended items in the picker', async () => {
     const host = document.createElement('div'); const root = createRoot(host);
     const app = { id: 1, slug: 'xiaoan', name: '问数小安', description: '', icon: '🤖', kind: 'chat' } as any;
-    await act(async () => root.render(<WorkbenchHome current={app} recent={[app]} recommended={[app]} onOpen={() => undefined} />));
+    await act(async () => root.render(<WorkbenchHome current={app} onOpen={() => undefined} />));
     const hero = host.querySelector('.workbench-home__hero');
     const children = Array.from(hero?.children ?? []);
     expect(children[0]?.textContent).toBe('🤖');
