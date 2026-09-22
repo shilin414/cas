@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Button, Drawer } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -11,6 +11,7 @@ import {
 import MobileAgentSwitcher from '@/components/Mobile/MobileAgentSwitcher';
 import MobileWorkbenchDrawer from '@/workbench/shell/MobileWorkbenchDrawer';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
+import { useRunChatStore } from '@/stores/useRunChatStore';
 import { useWorkspaceBootstrapStore } from '@/stores/useWorkspaceBootstrapStore';
 import type { ShellChrome } from './useShellChrome';
 import { MobileHeaderProvider, useMobileHeaderState } from './mobileHeader';
@@ -22,6 +23,7 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
   const loadBootstrap = useWorkspaceBootstrapStore((state) => state.load);
   const bootstrapDirty = useWorkspaceBootstrapStore((state) => state.dirty);
   const navigate = useNavigate();
+  const location = useLocation();
   const pageOverride = useMobileHeaderState();
   const mobile = { ...chrome.mobile, ...pageOverride };
   const mode = mobile.mode ?? 'workspace';
@@ -41,7 +43,16 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
 
   const handleNewTask = () => {
     setMobileNavOpen(false);
-    navigate('/');
+    if (pageOverride?.onAction) { pageOverride.onAction(); return; }
+    const applicationId = location.pathname.startsWith('/chat/')
+      ? useWorkspaceStore.getState().activeApplicationId : null;
+    if (applicationId != null) {
+      useWorkspaceStore.getState().startNewConversation(applicationId);
+      useRunChatStore.getState().setActiveConversation(null);
+      navigate('/', { state: { newTaskApplicationId: applicationId } });
+    } else {
+      navigate('/');
+    }
   };
 
   const renderAction = () => {

@@ -59,6 +59,7 @@ import type { V2Application } from '@/services/runApi';
 import { useNavigationPreferencesStore } from '@/stores/useNavigationPreferencesStore';
 import { useWorkspaceBootstrapStore } from '@/stores/useWorkspaceBootstrapStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
+import { useRunChatStore } from '@/stores/useRunChatStore';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -66,7 +67,7 @@ const roots: Array<{ host: HTMLElement; root: Root }> = [];
 
 const LocationProbe = () => {
   const location = useLocation();
-  return <output data-testid="location">{location.pathname}</output>;
+  return <output data-testid="location" data-state={JSON.stringify(location.state)}>{location.pathname}</output>;
 };
 
 function buttonByText(text: string): HTMLButtonElement {
@@ -396,4 +397,16 @@ describe('MobileAppShell route-aware header', () => {
     const drawer = document.querySelector('[data-testid="drawer"]');
     expect(drawer?.textContent).not.toContain('企业控制台');
   });
+});
+
+it('mobile new task carries the current chat agent and clears its old context', async () => {
+  useWorkspaceStore.setState({activeApplicationId:7});
+  useWorkspaceStore.getState().rememberConversation(7,123);
+  useWorkspaceStore.getState().setDraft(7,'旧草稿');
+  useRunChatStore.getState().setActiveConversation(123);
+  await mountShell('/chat/it-agent');
+  await act(async()=>buttonByText('新任务').click());
+  expect(JSON.parse(document.querySelector('[data-testid="location"]')!.getAttribute('data-state')!)).toEqual({newTaskApplicationId:7});
+  expect(useWorkspaceStore.getState().workspaces[7]).toMatchObject({conversationId:null,draft:''});
+  expect(useRunChatStore.getState().activeConversationId).toBeNull();
 });

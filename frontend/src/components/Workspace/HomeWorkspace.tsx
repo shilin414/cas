@@ -5,9 +5,9 @@
  * Bootstrap resolves the default agent; explicit selection resolves one entity.
  * Historical conversation deep links still open the owning chat workspace.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Empty, Spin, message } from 'antd';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { routeForApplication } from '@/lib/applicationRoute';
 import { api } from '@/services/api';
 import { RunChatPanel } from '@/components/Chat';
@@ -24,6 +24,11 @@ import './HomeWorkspace.css';
 
 const HomeWorkspace: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigationKey = location.key ?? 'default';
+  const navigationState: unknown = location.state;
+  const rawApplicationId = navigationState && typeof navigationState === 'object'
+    && 'newTaskApplicationId' in navigationState ? navigationState.newTaskApplicationId : null;
   const [searchParams, setSearchParams] = useSearchParams();
   // Mobile swaps ONLY the empty state (§6.1): the WorkspaceHost, the Run API
   // and this component's deep-link / @mention handling are shared, so the two
@@ -32,10 +37,22 @@ const HomeWorkspace: React.FC = () => {
   const loadBootstrap = useWorkspaceBootstrapStore((state) => state.load);
   const defaultApplication = useWorkspaceBootstrapStore((state) => state.defaultApplication);
   const isMobile = useIsMobile();
-  const [selectedApplication, setSelectedApplication] = useState<ComposerApplication | null>(null);
+  // Carry identity only. Never inherit the previous task's conversation or input.
+  const requestedApplicationId = !searchParams.get('conversation')
+    && typeof rawApplicationId === 'number' && Number.isSafeInteger(rawApplicationId) && rawApplicationId > 0
+    ? rawApplicationId : null;
+  const [selection, setSelection] = useState<{
+    key: string;
+    application: ComposerApplication | null;
+    status: 'loading' | 'ready' | 'error';
+    error?: string;
+  }>({ key: navigationKey, application: null, status: requestedApplicationId ? 'loading' : 'ready' });
+  const [selectionRetry, setSelectionRetry] = useState(0);
   const selectionVersion = useRef(0);
-  useEffect(() => () => { selectionVersion.current++; }, []);
-  const currentApplication = selectedApplication ?? defaultApplication;
+  const invalidateSelection = useCallback(() => ++selectionVersion.current, []);
+  const currentApplication = (selection.key === navigationKey ? selection.application : null) ?? defaultApplication;
+  const selectionPending = requestedApplicationId != null
+    && (selection.key !== navigationKey || selection.status === 'loading');
   const drafts = useRef<Record<number, string>>({});
   const ensureApplication = useApplicationEntityStore((state) => state.ensure);
   const openApplication = useWorkspaceStore((state) => state.openApplication);
@@ -45,6 +62,34 @@ const HomeWorkspace: React.FC = () => {
   const [resolveFailed, setResolveFailed] = useState(false);
 
   useEffect(() => { void loadBootstrap(); }, [loadBootstrap]);
+
+  useEffect(() => {
+    const version = invalidateSelection();
+    drafts.current = {};
+    if (requestedApplicationId == null) {
+      setSelection({ key: navigationKey, application: null, status: 'ready' });
+    } else {
+      setSelection({ key: navigationKey, application: null, status: 'loading' });
+      void ensureApplication(requestedApplicationId, { maxAgeMs: 0, bypassBackoff: selectionRetry > 0 })
+        .then((application) => {
+          if (version !== selectionVersion.current) return;
+          if (!application || application.is_consumable === false
+            || (application.kind !== 'chat' && application.renderer_key !== 'chat')) {
+            setSelection({ key: navigationKey, application: null, status: 'error', error: '该智能体暂不可用，请重试或选择默认智能体。' });
+            return;
+          }
+          useRunChatStore.getState().setActiveConversation(null);
+          openApplication(application.id);
+          setSelection({ key: navigationKey, application, status: 'ready' });
+        })
+        .catch(() => {
+          if (version === selectionVersion.current) {
+            setSelection({ key: navigationKey, application: null, status: 'error', error: '智能体加载失败，请检查网络后重试。' });
+          }
+        });
+    }
+    return () => { invalidateSelection(); };
+  }, [navigationKey, requestedApplicationId, selectionRetry, ensureApplication, openApplication, invalidateSelection]);
 
   const paramConversation = searchParams.get('conversation');
   const conversationParam = paramConversation
@@ -104,7 +149,7 @@ const HomeWorkspace: React.FC = () => {
   });
 
   const openApplicationWorkspace = async (application: ApplicationSummary) => {
-    const version = ++selectionVersion.current;
+    const version = invalidateSelection();
     if (isMobile || application.kind !== 'chat') {
       openApplication(application.id);
       navigate(routeForApplication(application));
@@ -115,15 +160,24 @@ const HomeWorkspace: React.FC = () => {
       if (version !== selectionVersion.current) return;
       if (!resolved) { message.error('该智能体暂不可用'); return; }
       useRunChatStore.getState().setActiveConversation(null);
-      setSelectedApplication(resolved);
+      setSelection({ key: navigationKey, application: resolved, status: 'ready' });
       openApplication(resolved.id);
     } catch { if (version === selectionVersion.current) message.error('切换智能体失败，请重试'); }
   };
 
-  if (resolving) {
+  if (resolving || selectionPending) {
     return (
       <div className="workspace-host__loading"><Spin size="large" /></div>
     );
+  }
+
+  if (requestedApplicationId != null && selection.key === navigationKey && selection.status === 'error') {
+    return <div className="workspace-host__missing">
+      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selection.error}>
+        <Button type="primary" onClick={() => setSelectionRetry(value => value + 1)}>重新加载</Button>
+        <Button onClick={() => navigate('/', { replace: true, state: null })}>使用默认智能体</Button>
+      </Empty>
+    </div>;
   }
 
   // A FAILED deep-link lookup keeps the `?conversation=` param and offers a
@@ -147,7 +201,7 @@ const HomeWorkspace: React.FC = () => {
   return (
     <div className="workspace-host">
       <RunChatPanel
-        key={currentApplication?.id ?? 'loading'}
+        key={`${navigationKey}:${currentApplication?.id ?? 'loading'}`}
         applicationId={currentApplication?.id}
         homeWorkspace
         afterComposer={currentApplication && <AgentWorkspaceCollections key={currentApplication.id} applicationId={currentApplication.id} slug={currentApplication.slug} />}

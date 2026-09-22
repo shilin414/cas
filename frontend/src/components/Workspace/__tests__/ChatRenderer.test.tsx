@@ -11,11 +11,19 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/components/Chat', () => ({
-  RunChatPanel: () => <div>chat panel</div>,
+  RunChatPanel: ({ application }: { application?: { name: string } }) => <div>chat panel {application?.name}</div>,
 }));
 vi.mock('../ApplicationSwitcher', () => ({ default: () => <div>switcher</div> }));
+vi.mock('@/workbench/home/WorkbenchHome', () => ({ default: () => null }));
+vi.mock('@/workbench/home/AgentWorkspaceCollections', () => ({ default: () => null }));
 
 import ChatRenderer from '../ChatRenderer';
+import HomeWorkspace from '../HomeWorkspace';
+import MobileAppShell from '@/shell/MobileAppShell';
+import { useWorkspaceBootstrapStore } from '@/stores/useWorkspaceBootstrapStore';
+import { useApplicationEntityStore } from '@/stores/useApplicationEntityStore';
+const originalLoad = useWorkspaceBootstrapStore.getState().load;
+const originalEnsure = useApplicationEntityStore.getState().ensure;
 import type { V2Application } from '@/services/runApi';
 import { useRunChatStore } from '@/stores/useRunChatStore';
 import { useWorkspaceStore, workspaceStateOf } from '@/stores/useWorkspaceStore';
@@ -36,10 +44,10 @@ const application = {
 
 function LocationProbe() {
   const location = useLocation();
-  return <div data-testid="location">{location.pathname}{location.search}</div>;
+  return <div data-testid="location" data-state={JSON.stringify(location.state)}>{location.pathname}{location.search}</div>;
 }
 
-async function renderChat() {
+async function renderChat(home: React.ReactNode = <div>home</div>) {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -50,7 +58,7 @@ async function renderChat() {
         <LocationProbe />
         <Routes>
           <Route path="/chat/:applicationSlug" element={<ChatRenderer application={application} />} />
-          <Route path="/" element={<div>home</div>} />
+          <Route path="/" element={home} />
         </Routes>
       </MemoryRouter>,
     );
@@ -66,8 +74,10 @@ beforeEach(() => {
   useRunChatStore.getState().setActiveConversation(123);
 });
 
-afterEach(() => {
-  while (roots.length) roots.pop()?.unmount();
+afterEach(async () => {
+  while (roots.length) await act(async () => roots.pop()?.unmount());
+  useWorkspaceBootstrapStore.setState({load: originalLoad, defaultApplication: null});
+  useApplicationEntityStore.setState({ensure: originalEnsure});
   document.body.innerHTML = '';
 });
 
@@ -84,6 +94,7 @@ describe('ChatRenderer desktop new task', () => {
 
     expect(host.querySelector('[data-testid="location"]')?.textContent).toBe('/');
     expect(host.textContent).toContain('home');
+    expect(JSON.parse(host.querySelector('[data-testid="location"]')!.getAttribute('data-state')!)).toEqual({ newTaskApplicationId: application.id });
     expect(useRunChatStore.getState().activeConversationId).toBeNull();
     expect(workspaceStateOf(
       useWorkspaceStore.getState().workspaces,
@@ -92,3 +103,37 @@ describe('ChatRenderer desktop new task', () => {
   });
 });
 
+
+it('carries the agent through the real chat-to-home transition when the default is different', async () => {
+  useWorkspaceBootstrapStore.setState({defaultApplication:{...application,id:99,name:'其他默认智能体',slug:'other'},load:vi.fn().mockResolvedValue(undefined)});
+  const ensure=vi.fn().mockResolvedValue(application);
+  useApplicationEntityStore.setState({ensure});
+  const host=await renderChat(<HomeWorkspace />);
+  const button=Array.from(host.querySelectorAll('button')).find(item=>item.textContent?.includes('新任务'))!;
+  await act(async()=>button.click());
+  expect(host.querySelector('[data-testid="location"]')?.textContent).toBe('/');
+  expect(ensure).toHaveBeenCalledWith(application.id, expect.anything());
+  expect(host.textContent).toContain('chat panel 财务智能体');
+  expect(host.textContent).not.toContain('其他默认智能体');
+  expect(useRunChatStore.getState().activeConversationId).toBeNull();
+});
+
+it('mobile shell and chat renderer do not race the return-home navigation', async () => {
+  useWorkspaceBootstrapStore.setState({defaultApplication:{...application,id:99,name:'其他默认智能体'},load:vi.fn().mockResolvedValue(undefined)});
+  useApplicationEntityStore.setState({ensure:vi.fn().mockResolvedValue(application)});
+  useWorkspaceStore.getState().openApplication(application.id);
+  const host=document.createElement('div');document.body.appendChild(host);
+  const root=createRoot(host);roots.push(root);
+  await act(async()=>root.render(<MemoryRouter initialEntries={['/chat/finance-agent?conversation=123']}>
+    <LocationProbe />
+    <Routes><Route element={<MobileAppShell chrome={{hideHeader:false,hideSidebar:false,padded:false,mobile:{showAgentSwitcher:false}}} />}>
+      <Route path="/chat/:applicationSlug" element={<ChatRenderer application={application} />} />
+      <Route path="/" element={<HomeWorkspace />} />
+    </Route></Routes>
+  </MemoryRouter>));
+  await act(async()=>(host.querySelector('.mobile-shell__task-btn') as HTMLButtonElement).click());
+  expect(host.querySelector('[data-testid="location"]')?.textContent).toBe('/');
+  expect(host.textContent).toContain('chat panel 财务智能体');
+  expect(host.textContent).not.toContain('其他默认智能体');
+  expect(workspaceStateOf(useWorkspaceStore.getState().workspaces,application.id)).toMatchObject({conversationId:null,draft:'',scrollTop:0});
+});

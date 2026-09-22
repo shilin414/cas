@@ -23,12 +23,13 @@
   .agent-home-surface > .agent-home-collections,
   .agent-home-surface > .run-chat-error-banner { width: 100%; max-width: var(--agent-home-width); margin-inline: auto; }
   .workbench-home--desktop { display: block; width: 100%; padding: 0; margin: 0 0 36px; }
-  .agent-home-identity { display: flex; align-items: center; gap: 20px; }
-  .agent-home-identity__body { min-width: 0; }
+  /* Anchor the avatar to the title, not the changing height of the description. */
+  .agent-home-identity { display: flex; align-items: flex-start; gap: 20px; }
+  .agent-home-identity__body { flex: 1; min-width: 0; }
   .agent-home-identity h1 { margin: 0; line-height: 1.3; }
   .agent-home-identity .workbench-home__current { min-height: 40px; padding: 0; border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: 28px; font-weight: 600; gap: 12px; text-align: left; }
   .agent-home-identity .workbench-home__current .anticon { color: var(--color-text-dim); font-size: 13px; }
-  .agent-home-identity p { margin: 6px 0 0; max-width: none; text-align: left; color: var(--color-text-dim); line-height: 1.6; }
+  .agent-home-identity .agent-home-identity__body > p { margin: 6px 0 0; max-width: none; overflow-wrap: anywhere; text-align: left; color: var(--color-text-dim); line-height: 1.6; }
   .agent-home-surface > .chat-input-area { flex: none; padding: 0; }
   .agent-home-surface .chat-input-wrapper { max-width: none; }
   .agent-home-surface .run-chat-composer { position: relative; border: 1px solid var(--color-border); border-radius: 24px; background: var(--color-bg-card); box-shadow: var(--shadow-md); padding: 16px 18px 12px; gap: 8px; transition: border-color var(--motion-fast), box-shadow var(--motion-fast); }
