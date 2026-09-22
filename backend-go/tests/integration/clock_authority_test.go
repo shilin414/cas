@@ -150,7 +150,7 @@ func TestDeliveryRetryTimeIsDatabaseClockBased(t *testing.T) {
 	execID := seedDeliveryExecution(t, svc, "clock_retry")
 
 	// pending → sending (the delivery worker's claim).
-	if res, err := svc.Querier().CASClaimDelivery(ctx, execID.Bytes()); err != nil {
+	if res, err := svc.Querier().CASClaimDelivery(ctx, db.CASClaimDeliveryParams{ID: execID.Bytes(), Attempt: 0}); err != nil {
 		t.Fatalf("claim delivery: %v", err)
 	} else if n, _ := res.RowsAffected(); n != 1 {
 		t.Fatalf("claim delivery affected %d rows, want 1", n)
@@ -158,6 +158,7 @@ func TestDeliveryRetryTimeIsDatabaseClockBased(t *testing.T) {
 
 	const backoff = 30 * time.Second
 	if _, err := svc.Querier().RequeueDelivery(ctx, db.RequeueDeliveryParams{
+		Attempt:       1,
 		BackoffMicros: backoff.Microseconds(),
 		ErrorCode:     "send_failed",
 		ErrorMessage:  sql.NullString{String: "boom", Valid: true},

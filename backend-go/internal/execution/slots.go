@@ -114,7 +114,9 @@ type ProviderSlots struct {
 	DB          *sql.DB
 	Provider    string
 	MaxInflight int
-	Lease       time.Duration
+	// UseCatalogPolicy reads a single authoritative limit inside every admission.
+	UseCatalogPolicy bool
+	Lease            time.Duration
 }
 
 func NewProviderSlots(d *sql.DB, provider string, max int, lease time.Duration) *ProviderSlots {
@@ -146,7 +148,13 @@ func (l *ProviderSlots) leaseMicros() int64 {
 // post-decision EFFECTIVE depth (for rejection metrics) — the count of other
 // runs' capacity plus this one, never a raw slot count.
 func (l *ProviderSlots) Acquire(ctx context.Context, own ExecutionOwnership) (*ProviderSlot, bool, int, error) {
-	if l == nil || l.DB == nil || l.MaxInflight <= 0 {
+	if l == nil {
+		return nil, true, 0, nil
+	}
+	if l.UseCatalogPolicy && l.DB == nil {
+		return nil, false, 0, fmt.Errorf("provider capacity database unavailable")
+	}
+	if !l.UseCatalogPolicy && (l.DB == nil || l.MaxInflight <= 0) {
 		return nil, true, 0, nil
 	}
 	if !own.Valid() {
@@ -209,6 +217,17 @@ func (l *ProviderSlots) acquireOnce(ctx context.Context, own ExecutionOwnership,
 	// no lock cycle. A concurrent reaper/heartbeat either commits first or
 	// conflicts this whole admission transaction, which Acquire retries with
 	// a fresh snapshot.
+	maxInflight := l.MaxInflight
+	if l.UseCatalogPolicy {
+		policy, err := q.GetProviderCapacityForUpdate(ctx, l.Provider)
+		if err != nil {
+			return nil, false, 0, fmt.Errorf("provider capacity policy unavailable: %w", err)
+		}
+		if policy == 0 {
+			return nil, false, 0, fmt.Errorf("provider capacity policy must be positive")
+		}
+		maxInflight = int(policy)
+	}
 	if _, err := verifyActiveOwnershipTx(ctx, tx, own); err != nil {
 		return nil, false, 0, err
 	}
@@ -287,7 +306,7 @@ func (l *ProviderSlots) acquireOnce(ctx context.Context, own ExecutionOwnership,
 	if err != nil {
 		return nil, false, 0, err
 	}
-	if int(other) >= l.MaxInflight {
+	if int(other) >= maxInflight {
 		// Rejection writes nothing: the deferred rollback discards the
 		// serialization write, so concurrent rejections cannot conflict with
 		// each other at commit and cannot exhaust the retry budget.

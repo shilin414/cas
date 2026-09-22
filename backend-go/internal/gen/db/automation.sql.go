@@ -16,21 +16,28 @@ import (
 const cASClaimDelivery = `-- name: CASClaimDelivery :execresult
 UPDATE delivery_executions
 SET status = 'sending', attempt = attempt + 1
-WHERE id = ? AND status = 'pending'
+WHERE id = ? AND status = 'pending' AND attempt = ?
+  AND attempt < max_attempts
+  AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP(3))
 `
+
+type CASClaimDeliveryParams struct {
+	ID      []byte
+	Attempt uint32
+}
 
 // CAS claim: one delivery worker wins; 0 rows = someone else got it.
 // Only pending→sending: a duplicate stream message can never re-claim a
 // row another worker is already sending (no double Feishu messages).
-func (q *Queries) CASClaimDelivery(ctx context.Context, id []byte) (sql.Result, error) {
-	return q.db.ExecContext(ctx, cASClaimDelivery, id)
+func (q *Queries) CASClaimDelivery(ctx context.Context, arg CASClaimDeliveryParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, cASClaimDelivery, arg.ID, arg.Attempt)
 }
 
 const cASFinishDelivery = `-- name: CASFinishDelivery :execresult
 UPDATE delivery_executions
 SET status = ?, external_message_id = ?, error_code = ?, error_message = ?,
     sent_at = IF(? = 'succeeded', CURRENT_TIMESTAMP(3), sent_at)
-WHERE id = ? AND status = 'sending'
+WHERE id = ? AND status = 'sending' AND attempt = ?
 `
 
 type CASFinishDeliveryParams struct {
@@ -40,6 +47,7 @@ type CASFinishDeliveryParams struct {
 	ErrorMessage      sql.NullString
 	Column5           interface{}
 	ID                []byte
+	Attempt           uint32
 }
 
 func (q *Queries) CASFinishDelivery(ctx context.Context, arg CASFinishDeliveryParams) (sql.Result, error) {
@@ -50,6 +58,7 @@ func (q *Queries) CASFinishDelivery(ctx context.Context, arg CASFinishDeliveryPa
 		arg.ErrorMessage,
 		arg.Column5,
 		arg.ID,
+		arg.Attempt,
 	)
 }
 
@@ -566,15 +575,37 @@ SELECT id, schedule_id, scheduled_at, enqueued_at, admitted_at, run_id, status,
        triggered_at, finished_at, created_at, updated_at, delivery_snapshot_at
 FROM schedule_occurrences
 WHERE status = 'pending'
+  AND NOT EXISTS (
+      SELECT 1 FROM schedule_occurrences active
+      WHERE active.schedule_id = schedule_occurrences.schedule_id
+        AND active.status IN ('queued', 'running')
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM schedule_occurrences earlier
+      WHERE earlier.schedule_id = schedule_occurrences.schedule_id
+        AND earlier.status = 'pending'
+        AND (earlier.scheduled_at < schedule_occurrences.scheduled_at
+             OR (earlier.scheduled_at = schedule_occurrences.scheduled_at AND earlier.id < schedule_occurrences.id))
+  )
+  AND (? <= 0 OR (
+      SELECT COUNT(*) FROM runs
+      WHERE runs.user_id = (SELECT owner_user_id FROM schedules WHERE schedules.id = schedule_occurrences.schedule_id)
+        AND runs.status NOT IN ('cancelled', 'succeeded', 'failed', 'interrupted')
+  ) < ?)
 ORDER BY scheduled_at, id
 LIMIT ?
 `
 
+type ListAdmissiblePendingOccurrencesParams struct {
+	MaxOutstanding sql.NullInt64
+	Limit          int32
+}
+
 // Occurrence admission queue (overlap=queue semantics): pending rows are
 // converted into runs once the schedule has no active execution.
 // FIFO per schedule: scheduled_at first, id as the tiebreaker.
-func (q *Queries) ListAdmissiblePendingOccurrences(ctx context.Context, limit int32) ([]ScheduleOccurrence, error) {
-	rows, err := q.db.QueryContext(ctx, listAdmissiblePendingOccurrences, limit)
+func (q *Queries) ListAdmissiblePendingOccurrences(ctx context.Context, arg ListAdmissiblePendingOccurrencesParams) ([]ScheduleOccurrence, error) {
+	rows, err := q.db.QueryContext(ctx, listAdmissiblePendingOccurrences, arg.MaxOutstanding, arg.MaxOutstanding, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -875,7 +906,12 @@ SELECT id, owner_user_id, name, description, application_id,
        created_at, updated_at, deleted_at
 FROM schedules
 WHERE enabled = 1 AND deleted_at IS NULL AND next_run_at IS NOT NULL AND next_run_at <= ?
-ORDER BY next_run_at
+AND (overlap_policy <> 'queue' OR NOT EXISTS (
+    SELECT 1 FROM schedule_occurrences active
+    WHERE active.schedule_id = schedules.id
+      AND active.status IN ('pending', 'queued', 'running')
+))
+ORDER BY next_run_at, id
 LIMIT ?
 `
 
@@ -1373,7 +1409,7 @@ UPDATE delivery_executions
 SET status = 'pending',
     next_attempt_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ? MICROSECOND),
     error_code = ?, error_message = ?
-WHERE id = ? AND status = 'sending'
+WHERE id = ? AND status = 'sending' AND attempt = ?
 `
 
 type RequeueDeliveryParams struct {
@@ -1381,6 +1417,7 @@ type RequeueDeliveryParams struct {
 	ErrorCode     string
 	ErrorMessage  sql.NullString
 	ID            []byte
+	Attempt       uint32
 }
 
 // Retry time = DB clock + the worker's backoff in microseconds (Clock
@@ -1392,6 +1429,7 @@ func (q *Queries) RequeueDelivery(ctx context.Context, arg RequeueDeliveryParams
 		arg.ErrorCode,
 		arg.ErrorMessage,
 		arg.ID,
+		arg.Attempt,
 	)
 }
 

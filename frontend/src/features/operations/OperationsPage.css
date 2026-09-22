@@ -1,0 +1,42 @@
+.ops-page { display: flex; flex-direction: column; gap: var(--space-6); width: min(100%, var(--content-max)); min-width: 0; margin-inline: auto; color: var(--color-text); }
+.ops-page--mobile { padding: var(--space-6); }
+.ops-heading { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); }
+.ops-heading > div { min-width: 0; }
+.ops-heading > button { flex-shrink: 0; }
+.ops-page h2 { margin: 0; font-family: var(--font-display); font-size: var(--font-size-page-title); line-height: var(--line-height-tight); }
+.ops-page h3, .ops-page h4 { margin: 0; overflow-wrap: anywhere; }
+.ops-heading p, .ops-note { margin: var(--space-2) 0 0; color: var(--color-text-sec); font-size: var(--font-size-meta); line-height: var(--line-height-normal); }
+.ops-stack { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.ops-panel, .ops-metric { border: 1px solid var(--color-border); border-radius: var(--radius-panel); padding: var(--space-6); background: var(--color-bg-card); min-width: 0; }
+.ops-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); }
+.ops-metric { display: flex; flex-direction: column; gap: var(--space-3); }
+.ops-metric > span { color: var(--color-text-sec); }
+.ops-metric > strong { font-size: var(--font-size-section-title); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ops-metric small, .ops-cell small, .ops-table small { color: var(--color-text-sec); font-size: var(--font-size-caption); line-height: var(--line-height-normal); }
+.ops-table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-control); }
+.ops-table { width: 100%; border-collapse: collapse; text-align: left; font-size: var(--font-size-meta); }
+.ops-table th, .ops-table td { padding: var(--space-4); border-bottom: 1px solid var(--color-border); vertical-align: top; overflow-wrap: anywhere; min-width: 120px; }
+.ops-table th { font-weight: 600; }
+.ops-table thead { background: var(--color-bg-elevated); }
+.ops-table tr:last-child td, .ops-table tr:last-child th { border-bottom: 0; }
+.ops-table small, .ops-cell small { display: block; margin-top: var(--space-2); }
+.ops-runs-table { min-width: 900px; table-layout: fixed; }
+.ops-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(90px, .6fr); gap: var(--space-3); }
+.ops-field { display: flex; flex-direction: column; gap: var(--space-2); color: var(--color-text-sec); font-size: var(--font-size-meta); min-width: 0; }
+.ops-field select { width: 100%; min-width: 0; min-height: var(--control-h-sm, 32px); border: 1px solid var(--color-border); border-radius: var(--radius-control); padding: var(--space-2) var(--space-3); background: var(--color-bg-card); color: var(--color-text); font: inherit; }
+.ops-field select:focus-visible, .ops-table-scroll:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+.ops-actions { display: flex; gap: var(--space-3); flex-wrap: wrap; justify-content: flex-end; }
+.ops-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-4); }
+.ops-pagination > span { color: var(--color-text-sec); font-size: var(--font-size-meta); }
+.ops-cards { display: grid; gap: var(--space-4); }
+.ops-card { border: 1px solid var(--color-border); border-radius: var(--radius-control); padding: var(--space-4); background: var(--color-bg-card); overflow-wrap: anywhere; }
+.ops-card > .ops-cell, .ops-card > button { margin-top: var(--space-3); }
+.ops-card > small { color: var(--color-text-sec); }
+.ops-reason, .ops-page .ant-alert-description, .ops-page .ant-alert-message { overflow-wrap: anywhere; white-space: pre-wrap; }
+@media (max-width: 1100px) { .ops-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ops-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.ops-page--mobile .ops-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ops-page--mobile .ops-filters { grid-template-columns: minmax(0, 1fr); }
+.ops-page--mobile .ops-panel, .ops-page--mobile .ops-metric { padding: var(--space-4); }
+.ops-page--mobile .ops-heading { flex-wrap: wrap; }
+.ops-page--mobile .ops-field select, .ops-page--mobile .ant-input, .ops-page--mobile .ant-btn { min-height: 40px; }
+@media (max-width: 400px) { .ops-page--mobile { padding: var(--space-4); } .ops-page--mobile .ops-metrics { grid-template-columns: minmax(0, 1fr); } }

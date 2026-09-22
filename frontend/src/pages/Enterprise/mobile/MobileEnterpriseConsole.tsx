@@ -21,6 +21,8 @@ import AccessGroupsPage from '../shared/AccessGroupsPage';
 import AccessDiagnosisPage from '../shared/AccessDiagnosisPage';
 import { PermissionGuard } from '../shared/PermissionGuard';
 
+const OperationsPage = lazy(() => import('@/features/operations/OperationsPage'));
+
 const AIModelsPage = lazy(() => import('@/features/ai-models/AIModelsPage'));
 
 const SUBPAGE_TITLES: Record<string, string> = {
@@ -34,6 +36,7 @@ const SUBPAGE_TITLES: Record<string, string> = {
   'directory': '部门与人员',
   'directory/sync': '同步管理',
   'providers': 'Provider',
+  'operations': '运行中心',
   'ai-models': 'AI 模型管理',
   'audit': '审计日志',
 };
@@ -66,6 +69,7 @@ export default function MobileEnterpriseConsole() {
     if (baseKey === 'directory') return <PermissionGuard permission="directory.read"><MobileDirectoryPage key={baseKey} /></PermissionGuard>;
     if (baseKey === 'directory/sync') return <PermissionGuard permission="directory.sync.read"><MobileSyncPage key={baseKey} /></PermissionGuard>;
     if (baseKey === 'ai-models') return <PermissionGuard permission={["ai.model.read", "ai.model.test", "ai.model.log.read"]}><Suspense fallback={<div role="status">正在加载 AI 模型管理…</div>}><AIModelsPage /></Suspense></PermissionGuard>;
+    if (baseKey === 'operations') return <PermissionGuard permission="run.monitor.read"><Suspense fallback={<div role="status">正在加载运行中心…</div>}><OperationsPage mobile /></Suspense></PermissionGuard>;
     if (baseKey === 'providers') return <PermissionGuard permission="provider.read"><MobileProvidersPage key={baseKey} /></PermissionGuard>;
     if (baseKey === 'audit') return <PermissionGuard permission="audit.read"><MobileAuditPage key={baseKey} /></PermissionGuard>;
     return <MobileEnterpriseHome key="overview" />;

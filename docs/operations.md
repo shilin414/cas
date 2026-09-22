@@ -25,7 +25,8 @@
 
 API8080/Stream8081：/health/live、/health/ready、/metrics，无单独9090监听。
 Readiness只检查DB/Redis Ping，不检查SQL版本、集群全部槽、存储/飞书或消息回收。
-Worker/Scheduler没有HTTP探针；容器Running不代表没有热循环、失联或积压。
+Worker/Scheduler 新增可选私有 HTTP 探针与指标，默认关闭；启用配置和实际覆盖边界见[监控说明](../deploy/monitoring/README.md)。它不覆盖 Relay/目录同步或全部在途任务，容器 Running 或该探针 Ready 仍不等于全系统及上游健康。
+管理员可在[运行中心](operations-center.md)查询容量、积压与任务元数据，额度修改需要独立权限、确认和审计。
 关注Outbox backlog、执行/投递pending、最老待处理时间、Run终态、Redis错误/evictions、数据库连接、磁盘空间、SSE断连。
 
 人工只读SQL示例：

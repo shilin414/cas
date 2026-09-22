@@ -23,6 +23,8 @@ import ProvidersPage from './ProvidersPage';
 import AuditPage from './AuditPage';
 import '../EnterprisePage.css';
 
+const OperationsPage = lazy(() => import('@/features/operations/OperationsPage'));
+
 const AIModelsPage = lazy(() => import('@/features/ai-models/AIModelsPage'));
 
 const { Sider, Content } = Layout;
@@ -45,6 +47,7 @@ export default function DesktopEnterpriseConsole() {
     if (key === 'directory') return <PermissionGuard permission="directory.read"><DirectoryPage /></PermissionGuard>;
     if (key === 'directory/sync') return <PermissionGuard permission="directory.sync.read"><SyncPage /></PermissionGuard>;
     if (key === 'ai-models') return <PermissionGuard permission={["ai.model.read", "ai.model.test", "ai.model.log.read"]}><Suspense fallback={<div role="status">正在加载 AI 模型管理…</div>}><AIModelsPage /></Suspense></PermissionGuard>;
+    if (key === 'operations') return <PermissionGuard permission="run.monitor.read"><Suspense fallback={<div role="status">正在加载运行中心…</div>}><OperationsPage /></Suspense></PermissionGuard>;
     if (key === 'providers') return <PermissionGuard permission="provider.read"><ProvidersPage /></PermissionGuard>;
     if (key === 'audit') return <PermissionGuard permission="audit.read"><AuditPage /></PermissionGuard>;
     return <Overview />;

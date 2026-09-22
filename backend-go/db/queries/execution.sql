@@ -1092,3 +1092,7 @@ UPDATE runs
 SET status = 'failed', error_code = 'provider_submit_unknown', error_message = ?,
     finished_at = CURRENT_TIMESTAMP(3)
 WHERE id = ? AND status = 'waiting_external';
+
+-- name: GetProviderCapacityForUpdate :one
+-- Read the authoritative policy under the admission lock; never widen on error.
+SELECT max_inflight FROM providers WHERE provider_key = ? FOR UPDATE;

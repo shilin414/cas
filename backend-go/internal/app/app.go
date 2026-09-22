@@ -225,26 +225,20 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	schedJob := scheduler.New(dbh, runs, &bindingResolver{Catalog: catalogSvc, Users: identityRepo}, log, metrics)
 	// Run-now pending cap (复审 P1-3): bounded manual queue per schedule.
 	schedJob.MaxPendingManual = cfg.Runner.UserMaxPendingManual
+	schedJob.MaxOutstanding = cfg.Runner.UserMaxOutstanding
 
-	// Provider concurrency cap: the provider catalog row is the source of
-	// truth; AILY_MAX_INFLIGHT is only a bootstrap/default (and a
-	// deliberate override when the catalog row is absent or zero).
-	maxInflight := cfg.Aily.MaxInflight
-	if p, err := catalogRepo.ProviderByKey(ctx, "feishu_aily"); err == nil && p != nil && p.MaxInflight > 0 {
-		if p.MaxInflight != maxInflight {
-			log.Info("provider max_inflight from catalog policy",
-				"provider", p.Key, "policy", p.MaxInflight, "env_default", maxInflight)
-		}
-		maxInflight = p.MaxInflight
-	} else {
-		log.Info("provider max_inflight from env bootstrap",
-			"provider", "feishu_aily", "value", maxInflight)
+	maxInflight, err := loadProviderMaxInflight(ctx, catalogRepo, "feishu_aily")
+	if err != nil {
+		_ = rdb.Close()
+		_ = dbh.Close()
+		return nil, err
 	}
 
 	// Provider-wide capacity semaphore (Batch 5 §7): ONE slots object per
 	// PROVIDER, shared by every runtime route of that provider — per-runtime
 	// slots would silently multiply the real provider limit.
 	ailySlots := execution.NewProviderSlots(dbh, "feishu_aily", maxInflight, cfg.Runner.LeaseSeconds)
+	ailySlots.UseCatalogPolicy = true
 
 	// Worker dispatcher wiring (Batch 5 §22): register the providers this
 	// deployment can execute. A registration error is a boot-time fatal

@@ -7,7 +7,7 @@
 ## 当前技术与功能
 
 - Go **1.27**（`backend-go/go.mod`）；React 18、TypeScript、Vite 7、Ant Design、Zustand（精确依赖以 npm 锁文件为准）。
-- MySQL **5.7** 为持久化基线；仓库最新迁移为 **0044**。Redis 支持 standalone / Cluster；Worker 对 Redis 5 使用 `XPENDING + XCLAIM` 回退。
+- MySQL **5.7** 为持久化基线；仓库最新迁移为 **0045**（运行中心分页索引；本轮未执行）。Redis 支持 standalone / Cluster；Worker 对 Redis 5 使用 `XPENDING + XCLAIM` 回退。
 - 认证为飞书 OAuth + 服务端 Session Cookie + CSRF；本地口令登录仅用于已有管理员账号，不依赖浏览器 JWT。
 - 已有能力：任务工作台、飞书 Aily Agent、自动化计划及飞书投递、分享、企业目录同步、管理 RBAC/资源 ACL、业务应用、AI 模型管理/测试台与浏览器 OCR。
 - **AI 测试台不等于已接入正式 Run 执行链**。协作流程设计、更多 Provider 不在当前已交付清单中；界面中有入口也不代表后端执行器已注册。
@@ -38,6 +38,7 @@
 | Kubernetes 1.34.1 / Kustomize 5.7.1 | [Kubernetes 操作手册](docs/deployment/kubernetes.md) |
 | 人工建库、SQL 变更与管理员初始化 | [数据库操作手册](docs/deployment/database.md) |
 | 健康检查、验收与回滚 | [运维手册](docs/operations.md) |
+| 并发运行中心、权限与监控 | [运行中心](docs/operations-center.md) |
 | 完整目录 / 清理说明 | [文档索引](docs/README.md) |
 
 ### 本机启动摘要

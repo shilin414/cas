@@ -119,7 +119,12 @@ SELECT id, owner_user_id, name, description, application_id,
        created_at, updated_at, deleted_at
 FROM schedules
 WHERE enabled = 1 AND deleted_at IS NULL AND next_run_at IS NOT NULL AND next_run_at <= ?
-ORDER BY next_run_at
+AND (overlap_policy <> 'queue' OR NOT EXISTS (
+    SELECT 1 FROM schedule_occurrences active
+    WHERE active.schedule_id = schedules.id
+      AND active.status IN ('pending', 'queued', 'running')
+))
+ORDER BY next_run_at, id
 LIMIT ?;
 
 -- ──────────────────────────────────────────────────── schedule_occurrences ──
@@ -202,6 +207,23 @@ SELECT id, schedule_id, scheduled_at, enqueued_at, admitted_at, run_id, status,
        triggered_at, finished_at, created_at, updated_at, delivery_snapshot_at
 FROM schedule_occurrences
 WHERE status = 'pending'
+  AND NOT EXISTS (
+      SELECT 1 FROM schedule_occurrences active
+      WHERE active.schedule_id = schedule_occurrences.schedule_id
+        AND active.status IN ('queued', 'running')
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM schedule_occurrences earlier
+      WHERE earlier.schedule_id = schedule_occurrences.schedule_id
+        AND earlier.status = 'pending'
+        AND (earlier.scheduled_at < schedule_occurrences.scheduled_at
+             OR (earlier.scheduled_at = schedule_occurrences.scheduled_at AND earlier.id < schedule_occurrences.id))
+  )
+  AND (sqlc.arg(max_outstanding) <= 0 OR (
+      SELECT COUNT(*) FROM runs
+      WHERE runs.user_id = (SELECT owner_user_id FROM schedules WHERE schedules.id = schedule_occurrences.schedule_id)
+        AND runs.status NOT IN ('cancelled', 'succeeded', 'failed', 'interrupted')
+  ) < sqlc.arg(max_outstanding))
 ORDER BY scheduled_at, id
 LIMIT ?;
 
@@ -337,13 +359,15 @@ ORDER BY id;
 -- row another worker is already sending (no double Feishu messages).
 UPDATE delivery_executions
 SET status = 'sending', attempt = attempt + 1
-WHERE id = ? AND status = 'pending';
+WHERE id = ? AND status = 'pending' AND attempt = ?
+  AND attempt < max_attempts
+  AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP(3));
 
 -- name: CASFinishDelivery :execresult
 UPDATE delivery_executions
 SET status = ?, external_message_id = ?, error_code = ?, error_message = ?,
     sent_at = IF(? = 'succeeded', CURRENT_TIMESTAMP(3), sent_at)
-WHERE id = ? AND status = 'sending';
+WHERE id = ? AND status = 'sending' AND attempt = ?;
 
 -- name: RequeueDelivery :execresult
 -- Retry time = DB clock + the worker's backoff in microseconds (Clock
@@ -353,7 +377,7 @@ UPDATE delivery_executions
 SET status = 'pending',
     next_attempt_at = DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL sqlc.arg(backoff_micros) MICROSECOND),
     error_code = ?, error_message = ?
-WHERE id = ? AND status = 'sending';
+WHERE id = ? AND status = 'sending' AND attempt = ?;
 
 -- name: ListDueDeliveries :many
 -- "Due" is decided by the DB clock, not by the caller's clock.

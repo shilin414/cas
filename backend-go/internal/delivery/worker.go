@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -19,15 +20,18 @@ import (
 	db "github.com/shilin414/cas/backend-go/internal/gen/db"
 	"github.com/shilin414/cas/backend-go/internal/platform/ids"
 	"github.com/shilin414/cas/backend-go/internal/platform/redisx"
+	"github.com/shilin414/cas/backend-go/internal/platform/rolemonitor"
 	"github.com/shilin414/cas/backend-go/internal/platform/telemetry"
 	"github.com/shilin414/cas/backend-go/internal/sharing"
 )
 
 const (
-	group        = "deliverers"
-	leaseSeconds = 60 * time.Second // stuck 'sending' rows are reclaimed after this
-	reclaimEvery = 20 * time.Second
-	scanEvery    = time.Second
+	group                    = "deliverers"
+	leaseSeconds             = 60 * time.Second // stuck 'sending' rows are reclaimed after this
+	recoveryOperationTimeout = 5 * time.Second
+	reclaimEvery             = 20 * time.Second
+	scanEvery                = time.Second
+	deliverySendTimeout      = 45 * time.Second // includes claim, limiter, auth and remote IO; below lease
 	// maxAttemptsV1: deliveries dead-end after this many attempts
 	// (exponential backoff + jitter; 429-style errors cool down longer).
 	maxAttemptsV1 = 5
@@ -37,6 +41,8 @@ const (
 // delivery_executions absorbs duplicates, the due-scan loop recovers any
 // pending row whose stream message was lost (Redis restart, backlog loss).
 type Worker struct {
+	// ObserveLoop reports completed recovery IO, not timer liveness. Set before Run.
+	ObserveLoop   func(string, error)
 	PublicBaseURL string
 	DB            *sql.DB
 	RDB           *redisx.Client
@@ -54,6 +60,15 @@ func NewWorker(d *sql.DB, rdb *redisx.Client, workerID string, sender Sender, li
 	}
 	return &Worker{DB: d, RDB: rdb, WorkerID: workerID, Concurrency: 4,
 		Sender: sender, Limiter: limiter, Log: log, Metrics: m}
+}
+
+// MonitoringLoopBudgets references the actual recovery periods and budget,
+// so entrypoints cannot accidentally validate only the fast scan loop.
+func (w *Worker) MonitoringLoopBudgets() map[string]rolemonitor.LoopBudget {
+	return map[string]rolemonitor.LoopBudget{
+		"delivery_scan":    {Interval: scanEvery, OperationBudget: recoveryOperationTimeout},
+		"delivery_reclaim": {Interval: reclaimEvery, OperationBudget: recoveryOperationTimeout},
+	}
 }
 
 func (w *Worker) stream() string { return w.RDB.Key("queue", ProviderKey) }
@@ -164,46 +179,60 @@ func (w *Worker) process(ctx context.Context, msg goredis.XMessage) {
 		}
 	}()
 
+	sendCtx, cancelSend := context.WithTimeout(ctx, deliverySendTimeout)
+	defer cancelSend()
 	q := w.q(ctx)
-	row, err := q.GetDeliveryExecutionByID(ctx, id.Bytes())
+	row, err := q.GetDeliveryExecutionByID(sendCtx, id.Bytes())
 	if err != nil {
-		w.ack(ctx, msg.ID) // unknown execution — nothing to do
+		if err == sql.ErrNoRows {
+			w.ack(ctx, msg.ID)
+		} else {
+			w.Log.Warn("delivery lookup failed", "err", err)
+		}
 		return
 	}
 	if row.Status == schedule.DeliverySucceeded || row.Status == schedule.DeliveryFailed || row.Status == schedule.DeliverySkipped {
 		w.ack(ctx, msg.ID)
 		return
 	}
-	res, err := q.CASClaimDelivery(ctx, id.Bytes())
+	res, err := q.CASClaimDelivery(sendCtx, db.CASClaimDeliveryParams{ID: id.Bytes(), Attempt: row.Attempt})
 	if err != nil {
 		w.Log.Warn("delivery claim failed", "delivery_id", raw, "err", err)
 		return // leave unacked; reclaimed later
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		w.ack(ctx, msg.ID) // someone else owns it
+	n, err := res.RowsAffected()
+	if err != nil {
+		w.Log.Warn("delivery claim result unavailable", "err", err)
 		return
 	}
+	if n == 0 {
+		w.ack(ctx, msg.ID)
+		return
+	} // stale generation or not yet due
+
 	row.Attempt++ // CASClaimDelivery incremented attempt in DB
 
 	started := time.Now()
-	if err := w.send(ctx, row); err != nil {
-		w.handleFailure(ctx, row, err)
-	} else if _, err := q.CASFinishDelivery(ctx, db.CASFinishDeliveryParams{
-		Status: schedule.DeliverySucceeded,
-		// Column5 is the duplicated `status` placeholder in the query: it
-		// guards `sent_at = IF(? = 'succeeded', ...)`. Leaving it nil makes
-		// the guard NULL → falsy → a successful delivery keeps sent_at NULL,
-		// so the UI shows "已投递" without a send time (第九轮 user report).
-		Column5: schedule.DeliverySucceeded,
-		ID:      id.Bytes(),
-	}); err != nil {
-		w.Log.Error("delivery finish failed", "delivery_id", raw, "err", err)
+	sendErr := w.send(sendCtx, row)
+	cancelSend()
+	// Persist the outcome with a bounded independent context even on shutdown
+	// or send timeout. attempt is the monotonic ownership generation.
+	finishCtx, cancelFinish := execution.NewCleanupContext(ctx)
+	defer cancelFinish()
+	if sendErr != nil {
+		w.handleFailure(finishCtx, row, sendErr)
 	} else {
-		if w.Metrics != nil {
-			w.Metrics.DeliveryDuration.WithLabelValues(ChannelFeishu, schedule.DeliverySucceeded).
-				Observe(time.Since(started).Seconds())
-			w.Metrics.DeliverySendsTotal.
-				WithLabelValues(ChannelFeishu, "keyed").Inc()
+		result, err := q.CASFinishDelivery(finishCtx, db.CASFinishDeliveryParams{
+			Status: schedule.DeliverySucceeded, Column5: schedule.DeliverySucceeded,
+			ID: id.Bytes(), Attempt: row.Attempt,
+		})
+		if err != nil {
+			w.Log.Error("delivery finish failed", "delivery_id", raw, "err", err)
+		} else if n, err := result.RowsAffected(); err != nil {
+			w.Log.Error("delivery finish result unavailable", "delivery_id", raw, "err", err)
+		} else if n == 1 && w.Metrics != nil {
+			w.Metrics.DeliveryDuration.WithLabelValues(ChannelFeishu, schedule.DeliverySucceeded).Observe(time.Since(started).Seconds())
+			w.Metrics.DeliverySendsTotal.WithLabelValues(ChannelFeishu, "keyed").Inc()
 		}
 	}
 	w.ack(ctx, msg.ID)
@@ -284,17 +313,26 @@ func (w *Worker) handleFailure(ctx context.Context, row db.DeliveryExecution, se
 		code = "rate_limited"
 	}
 	q := w.q(ctx)
-	if attempt >= maxAttemptsV1 {
-		if _, err := q.CASFinishDelivery(ctx, db.CASFinishDeliveryParams{
+	maxAttempts := int(row.MaxAttempts)
+	if maxAttempts <= 0 {
+		maxAttempts = maxAttemptsV1
+	}
+	if attempt >= maxAttempts {
+		result, err := q.CASFinishDelivery(ctx, db.CASFinishDeliveryParams{
 			Status:       schedule.DeliveryFailed,
 			ErrorCode:    code,
 			ErrorMessage: sqlNullString(msg),
 			// Column5 = the duplicated `status` placeholder guarding sent_at;
 			// a failure must leave sent_at untouched.
 			Column5: schedule.DeliveryFailed,
-			ID:      row.ID,
-		}); err != nil {
+			ID:      row.ID, Attempt: row.Attempt,
+		})
+		if err != nil {
 			w.Log.Error("delivery dead-end failed", "err", err)
+			return
+		}
+		if n, err := result.RowsAffected(); err != nil || n != 1 {
+			w.Log.Warn("delivery failure was not applied", "err", err, "attempt", row.Attempt)
 			return
 		}
 		if w.Metrics != nil {
@@ -315,13 +353,18 @@ func (w *Worker) handleFailure(ctx context.Context, row db.DeliveryExecution, se
 	}
 	// The delay is applied by the DB clock inside RequeueDelivery: the
 	// worker only contributes the duration, never an absolute instant.
-	if _, err := q.RequeueDelivery(ctx, db.RequeueDeliveryParams{
+	result, err := q.RequeueDelivery(ctx, db.RequeueDeliveryParams{
 		BackoffMicros: backoff.Microseconds(),
 		ErrorCode:     code,
 		ErrorMessage:  sqlNullString(msg),
-		ID:            row.ID,
-	}); err != nil {
+		ID:            row.ID, Attempt: row.Attempt,
+	})
+	if err != nil {
 		w.Log.Error("delivery requeue failed", "err", err)
+		return
+	}
+	if n, err := result.RowsAffected(); err != nil || n != 1 {
+		w.Log.Warn("delivery retry was not applied", "err", err, "attempt", row.Attempt)
 		return
 	}
 	if w.Metrics != nil {
@@ -332,7 +375,7 @@ func (w *Worker) handleFailure(ctx context.Context, row db.DeliveryExecution, se
 }
 
 // dueScanLoop re-enqueues pending due deliveries whose stream message was
-// lost; CAS makes double sends impossible.
+// lost; generation fencing protects local state and upstream UUID deduplicates retries.
 func (w *Worker) dueScanLoop(ctx context.Context) {
 	ticker := time.NewTicker(scanEvery)
 	defer ticker.Stop()
@@ -341,13 +384,7 @@ func (w *Worker) dueScanLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			rows, err := w.q(ctx).ListDueDeliveries(ctx, 50)
-			if err != nil {
-				continue
-			}
-			for _, row := range rows {
-				w.enqueue(ctx, row.ID)
-			}
+			w.dueScanOnce(ctx)
 		}
 	}
 }
@@ -362,23 +399,54 @@ func (w *Worker) reclaimLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			q := w.q(ctx)
-			// "Stuck" is measured from the DB clock: the worker passes only
-			// the lease duration (Phase 3).
-			if _, err := q.ReclaimStuckDeliveries(ctx, leaseSeconds.Microseconds()); err != nil {
-				w.Log.Warn("delivery reclaim failed", "err", err)
-			}
-			if _, err := q.FailStuckDeliveries(ctx, db.FailStuckDeliveriesParams{
-				ErrorMessage: sqlNullString("worker crashed before delivery completed"),
-				LeaseMicros:  leaseSeconds.Microseconds(),
-			}); err != nil {
-				w.Log.Warn("delivery stuck fail failed", "err", err)
-			}
+			w.reclaimOnce(ctx)
 		}
 	}
 }
 
-func (w *Worker) enqueue(ctx context.Context, id []byte) {
+// Recovery observations are bounded independently of sends. Empty successful
+// scans count as progress; any read/write/enqueue error fails the pass.
+func (w *Worker) dueScanOnce(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, recoveryOperationTimeout)
+	defer cancel()
+	var result error
+	defer func() {
+		if w.ObserveLoop != nil {
+			w.ObserveLoop("delivery_scan", result)
+		}
+	}()
+	rows, err := w.q(ctx).ListDueDeliveries(ctx, 50)
+	if err != nil {
+		result = err
+		return
+	}
+	for _, row := range rows {
+		result = errors.Join(result, w.enqueue(ctx, row.ID))
+	}
+	result = errors.Join(result, ctx.Err())
+}
+func (w *Worker) reclaimOnce(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, recoveryOperationTimeout)
+	defer cancel()
+	q := w.q(ctx)
+	// The lease duration (not a local timestamp) preserves DB clock authority.
+	_, first := q.ReclaimStuckDeliveries(ctx, leaseSeconds.Microseconds())
+	if first != nil {
+		w.Log.Warn("delivery reclaim failed", "err", first)
+	}
+	_, second := q.FailStuckDeliveries(ctx, db.FailStuckDeliveriesParams{
+		ErrorMessage: sqlNullString("worker crashed before delivery completed"),
+		LeaseMicros:  leaseSeconds.Microseconds(),
+	})
+	if second != nil {
+		w.Log.Warn("delivery stuck fail failed", "err", second)
+	}
+	if w.ObserveLoop != nil {
+		w.ObserveLoop("delivery_reclaim", errors.Join(first, second, ctx.Err()))
+	}
+}
+
+func (w *Worker) enqueue(ctx context.Context, id []byte) error {
 	if err := w.RDB.XAdd(ctx, &goredis.XAddArgs{
 		Stream: w.stream(),
 		MaxLen: 100000,
@@ -389,7 +457,9 @@ func (w *Worker) enqueue(ctx context.Context, id []byte) {
 		},
 	}).Err(); err != nil {
 		w.Log.Warn("delivery enqueue failed", "err", err)
+		return err
 	}
+	return nil
 }
 
 func (w *Worker) ack(ctx context.Context, msgID string) {

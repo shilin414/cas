@@ -17,6 +17,7 @@ import (
 	"github.com/shilin414/cas/backend-go/internal/automation/schedule"
 	"github.com/shilin414/cas/backend-go/internal/execution"
 	db "github.com/shilin414/cas/backend-go/internal/gen/db"
+	"github.com/shilin414/cas/backend-go/internal/platform/rolemonitor"
 	"github.com/shilin414/cas/backend-go/internal/platform/telemetry"
 )
 
@@ -64,11 +65,14 @@ var ErrPendingCapReached = errors.New("scheduler: too many queued manual trigger
 
 // Scheduler drives the due-scan loop.
 type Scheduler struct {
-	DB      *sql.DB
-	Runs    *execution.Service
-	Binding RuntimeResolver
-	Log     *slog.Logger
-	Metrics *telemetry.Metrics
+	// ObserveLoop records real completed scheduling passes, including empty scans.
+	// Configure before Run; callbacks must not perform IO.
+	ObserveLoop func(string, error)
+	DB          *sql.DB
+	Runs        *execution.Service
+	Binding     RuntimeResolver
+	Log         *slog.Logger
+	Metrics     *telemetry.Metrics
 
 	Interval time.Duration
 	Batch    int
@@ -79,6 +83,8 @@ type Scheduler struct {
 	// enqueue unbounded work. 0 disables the cap. Enforced under the
 	// schedules row lock, so concurrent run-nows cannot overshoot it.
 	MaxPendingManual int
+	// MaxOutstanding is the same per-user budget used by interactive admission.
+	MaxOutstanding int
 }
 
 func New(d *sql.DB, runs *execution.Service, binding RuntimeResolver, log *slog.Logger, m *telemetry.Metrics) *Scheduler {
@@ -89,12 +95,23 @@ func New(d *sql.DB, runs *execution.Service, binding RuntimeResolver, log *slog.
 		Interval: time.Second, Batch: 100}
 }
 
+func (s *Scheduler) loopInterval() time.Duration {
+	if s.Interval <= 0 {
+		return time.Second
+	}
+	return s.Interval
+}
+
+// MonitoringLoopBudgets shares Run's normalized interval. Scheduler passes have
+// no fixed overall timeout today; zero is deliberately not an invented bound.
+// Long real passes can be NotReady; observation never cancels scheduling work.
+func (s *Scheduler) MonitoringLoopBudgets() map[string]rolemonitor.LoopBudget {
+	return map[string]rolemonitor.LoopBudget{"schedule": {Interval: s.loopInterval()}}
+}
+
 // Run loops until ctx is cancelled.
 func (s *Scheduler) Run(ctx context.Context) {
-	interval := s.Interval
-	if interval <= 0 {
-		interval = time.Second
-	}
+	interval := s.loopInterval()
 	batch := s.Batch
 	if batch <= 0 {
 		batch = 100
@@ -132,16 +149,27 @@ func captureDeliveryExpectations(ctx context.Context, q db.Querier, occurrenceID
 // first admit any pending occurrences (overlap=queue backlog), then fire
 // due schedule slots.
 func (s *Scheduler) ProcessDue(ctx context.Context) {
+	var result error
+	defer func() {
+		if s.ObserveLoop != nil {
+			s.ObserveLoop("schedule", result)
+		}
+	}()
 	// 第五轮 P2-2: an unreadable clock skips the whole tick. Firing it
 	// against the local clock would let one skewed host decide due /
 	// misfire / execution-window outcomes for everyone.
 	now, err := s.dbNow(ctx)
 	if err != nil {
+		result = err
 		s.Log.Error("scheduler db clock unavailable — tick skipped", "err", err)
 		return
 	}
-	s.admitPending(ctx, s.Batch, now)
-	s.processDue(ctx, s.Batch, now)
+	batch := s.Batch
+	if batch <= 0 {
+		batch = 100
+	}
+	// Keep both scans and their ordering; observation must not change admission.
+	result = errors.Join(s.admitPending(ctx, batch, now), s.processDue(ctx, batch, now), ctx.Err())
 }
 
 // dbNow resolves the tick clock from MySQL (Clock Authority, 评测 §十七):
@@ -166,28 +194,36 @@ func databaseNow(ctx context.Context, q db.Querier) (time.Time, error) {
 	return t.UTC(), nil
 }
 
-func (s *Scheduler) processDue(ctx context.Context, batch int, now time.Time) {
+func (s *Scheduler) processDue(ctx context.Context, batch int, now time.Time) error {
+	var result error
 	rows, err := s.q(ctx).ListDueSchedules(ctx, db.ListDueSchedulesParams{
 		NextRunAt: sql.NullTime{Time: now, Valid: true},
 		Limit:     int32(batch),
 	})
 	if err != nil {
 		s.Log.Error("scheduler scan failed", "err", err)
-		return
+		return err
 	}
 	for _, row := range rows {
 		slot := row.NextRunAt.Time.Truncate(time.Millisecond) // DATETIME(3) 丢纳秒
 		sch := schedule.FromDBRow(row)
 		if err := s.triggerSchedule(ctx, sch, slot, now); err != nil {
+			result = errors.Join(result, err)
 			s.Log.Error("schedule trigger failed",
 				"schedule_id", sch.ID, "slot", slot.Format(time.RFC3339), "err", err)
 		}
 	}
+	return result
 }
 
 // advance recomputes next_run_at from the fired slot; a once schedule
 // (or an exhausted trigger) disables itself.
 func (s *Scheduler) advance(ctx context.Context, q db.Querier, scheduleID int64, firedSlot time.Time) error {
+	return s.advanceWithPending(ctx, q, scheduleID, firedSlot, false)
+}
+
+// A quota-deferred last occurrence must remain enabled until it is admitted.
+func (s *Scheduler) advanceWithPending(ctx context.Context, q db.Querier, scheduleID int64, firedSlot time.Time, pending bool) error {
 	row, err := q.GetScheduleByID(ctx, uint64(scheduleID))
 	if err != nil {
 		return err
@@ -199,8 +235,10 @@ func (s *Scheduler) advance(ctx context.Context, q db.Querier, scheduleID int64,
 	}
 	var nextArg sql.NullTime
 	if next.IsZero() {
-		if _, err := q.SetScheduleEnabled(ctx, db.SetScheduleEnabledParams{Enabled: false, ID: uint64(scheduleID)}); err != nil {
-			return err
+		if !pending {
+			if err := disableWhenNoPending(ctx, q, uint64(scheduleID)); err != nil {
+				return err
+			}
 		}
 	} else {
 		nextArg = sql.NullTime{Time: next, Valid: true}
@@ -217,6 +255,10 @@ func (s *Scheduler) advance(ctx context.Context, q db.Querier, scheduleID int64,
 // `now` (skip / fire_once semantics) and returns how many slots were
 // skipped on the way. A once schedule disables itself.
 func (s *Scheduler) advancePast(ctx context.Context, q db.Querier, scheduleID int64, fromSlot, now time.Time) (int, error) {
+	return s.advancePastWithPending(ctx, q, scheduleID, fromSlot, now, false)
+}
+
+func (s *Scheduler) advancePastWithPending(ctx context.Context, q db.Querier, scheduleID int64, fromSlot, now time.Time, pending bool) (int, error) {
 	row, err := q.GetScheduleByID(ctx, uint64(scheduleID))
 	if err != nil {
 		return 0, err
@@ -231,8 +273,10 @@ func (s *Scheduler) advancePast(ctx context.Context, q db.Querier, scheduleID in
 		}
 		if cand.IsZero() {
 			// Never fires again: disable.
-			if _, err := q.SetScheduleEnabled(ctx, db.SetScheduleEnabledParams{Enabled: false, ID: uint64(scheduleID)}); err != nil {
-				return 0, err
+			if !pending {
+				if err := disableWhenNoPending(ctx, q, uint64(scheduleID)); err != nil {
+					return 0, err
+				}
 			}
 			_, err = q.TouchScheduleRunTimes(ctx, db.TouchScheduleRunTimesParams{
 				LastRunAt: sql.NullTime{Time: fromSlot, Valid: true}, NextRunAt: sql.NullTime{}, ID: uint64(scheduleID),
@@ -263,7 +307,7 @@ func (s *Scheduler) advancePast(ctx context.Context, q db.Querier, scheduleID in
 // after the scan are visible before the run is created, closing the
 // TOCTOU window between /disable and the scheduler tick.
 func (s *Scheduler) triggerSchedule(ctx context.Context, schSnapshot *schedule.Schedule, slot, now time.Time) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
+	tx, err := execution.BeginUserAdmissionTx(ctx, s.DB)
 	if err != nil {
 		return err
 	}
@@ -351,18 +395,21 @@ func (s *Scheduler) triggerSchedule(ctx context.Context, schSnapshot *schedule.S
 		}); err != nil && !isDuplicate(err) {
 			return err
 		}
-		if occ, err := q.GetScheduleOccurrenceBySlot(ctx, db.GetScheduleOccurrenceBySlotParams{
+		occ, observationErr := q.GetScheduleOccurrenceBySlot(ctx, db.GetScheduleOccurrenceBySlotParams{
 			ScheduleID: uint64(sch.ID), ScheduledAt: slot,
-		}); err == nil {
+		})
+		if observationErr == nil {
 			if err := captureDeliveryExpectations(ctx, q, occ.ID); err != nil {
 				return err
 			}
-			_, _ = q.MarkOccurrenceStatus(ctx, db.MarkOccurrenceStatusParams{Status: schedule.OccSkipped, ID: occ.ID})
+			_, observationErr = q.MarkOccurrenceStatus(ctx, db.MarkOccurrenceStatusParams{Status: schedule.OccSkipped, ID: occ.ID})
 		}
+		// Preserve existing advancement/commit order, but do not mask a failed
+		// occurrence write as a healthy scheduling pass.
 		if err := s.advance(ctx, q, sch.ID, slot); err != nil {
-			return err
+			return errors.Join(observationErr, err)
 		}
-		return tx.Commit()
+		return errors.Join(observationErr, tx.Commit())
 	}
 
 	// Misfire policies (scheduler downtime): the slot is older than the
@@ -533,6 +580,9 @@ func (s *Scheduler) countMissed(sch *schedule.Schedule, slot, now time.Time) (in
 // compensation and pending-occurrence admission.
 func (s *Scheduler) createRunForOccurrenceTx(ctx context.Context, tx *sql.Tx, sch *schedule.Schedule, occID uint64, binding *BindingView, now time.Time) (ids0 string, err error) {
 	q := db.New(tx)
+	if err := execution.CheckUserAdmissionInTx(ctx, tx, sch.OwnerUserID, s.MaxOutstanding); err != nil {
+		return "", err
+	}
 
 	// Conversation policy.
 	convID := int64(0)
@@ -622,9 +672,13 @@ func (s *Scheduler) createOccurrenceAndRunTx(ctx context.Context, tx *sql.Tx, q 
 		return 0, err
 	}
 
-	if _, err := s.createRunForOccurrenceTx(ctx, tx, sch, occRow.ID, binding, now); err != nil {
-		return 0, err
+	_, runErr := s.createRunForOccurrenceTx(ctx, tx, sch, occRow.ID, binding, now)
+	pending := errors.Is(runErr, execution.ErrUserOutstandingExceeded)
+	if runErr != nil && !pending {
+		return 0, runErr
 	}
+	// Quota exhaustion keeps the immutable occurrence pending. Advance this
+	// trigger normally; admission retries it without losing or duplicating a slot.
 
 	if mode == "run_now" {
 		if _, err := q.SetScheduleLastRun(ctx, db.SetScheduleLastRunParams{
@@ -636,10 +690,10 @@ func (s *Scheduler) createOccurrenceAndRunTx(ctx context.Context, tx *sql.Tx, q 
 	} else if mode == "misfire" {
 		// fire_once misfire: jump to the first slot after now — never
 		// replay the intermediate missed slots.
-		if _, err := s.advancePast(ctx, q, sch.ID, slot, now); err != nil {
+		if _, err := s.advancePastWithPending(ctx, q, sch.ID, slot, now, pending); err != nil {
 			return 0, err
 		}
-	} else if err := s.advance(ctx, q, sch.ID, slot); err != nil {
+	} else if err := s.advanceWithPending(ctx, q, sch.ID, slot, pending); err != nil {
 		return 0, err
 	}
 	return int64(occRow.ID), nil
@@ -664,7 +718,7 @@ func (s *Scheduler) TriggerNow(ctx context.Context, scheduleID, userID int64, is
 	}
 	now = now.Truncate(time.Millisecond)
 
-	tx, err := s.DB.BeginTx(ctx, nil)
+	tx, err := execution.BeginUserAdmissionTx(ctx, s.DB)
 	if err != nil {
 		return nil, err
 	}
@@ -780,21 +834,24 @@ func (s *Scheduler) enqueuePendingOccurrenceTx(ctx context.Context, q db.Querier
 // stuck misfire rows) into runs once their schedule has no queued/running
 // execution. This is the unified Occurrence Admission: overlap policy
 // belongs to the scheduler, not to the UI or the worker.
-func (s *Scheduler) admitPending(ctx context.Context, batch int, now time.Time) {
-	rows, err := s.q(ctx).ListAdmissiblePendingOccurrences(ctx, int32(batch))
+func (s *Scheduler) admitPending(ctx context.Context, batch int, now time.Time) error {
+	var result error
+	rows, err := s.q(ctx).ListAdmissiblePendingOccurrences(ctx, db.ListAdmissiblePendingOccurrencesParams{MaxOutstanding: sql.NullInt64{Int64: int64(s.MaxOutstanding), Valid: true}, Limit: int32(batch)})
 	if err != nil {
 		s.Log.Error("admission scan failed", "err", err)
-		return
+		return err
 	}
 	for _, occRow := range rows {
 		if err := s.admitOne(ctx, occRow, now); err != nil {
+			result = errors.Join(result, err)
 			s.Log.Error("occurrence admission failed", "occurrence_id", occRow.ID, "err", err)
 		}
 	}
+	return result
 }
 
 func (s *Scheduler) admitOne(ctx context.Context, occRow db.ScheduleOccurrence, now time.Time) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
+	tx, err := execution.BeginUserAdmissionTx(ctx, s.DB)
 	if err != nil {
 		return err
 	}
@@ -811,9 +868,8 @@ func (s *Scheduler) admitOne(ctx context.Context, occRow db.ScheduleOccurrence, 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Soft-deleted while pending: skip the occurrence.
-			_, _ = q.MarkOccurrenceStatus(ctx, db.MarkOccurrenceStatusParams{Status: schedule.OccSkipped, ID: occRow.ID})
-			_ = tx.Commit()
-			return nil
+			_, writeErr := q.MarkOccurrenceStatus(ctx, db.MarkOccurrenceStatusParams{Status: schedule.OccSkipped, ID: occRow.ID})
+			return errors.Join(writeErr, tx.Commit())
 		}
 		return err
 	}
@@ -830,9 +886,15 @@ func (s *Scheduler) admitOne(ctx context.Context, occRow db.ScheduleOccurrence, 
 	if err != nil {
 		return err
 	}
-	if !cur.Enabled || curRow.DeletedAt.Valid || !cur.TriggerConfig.WithinWindow(occRow.ScheduledAt) || !cur.TriggerConfig.WithinWindow(now) {
+	deadlineMissed := cur.ExecutionWindowSeconds > 0 && cur.DeadlinePolicy == schedule.DeadlineSkip && now.Sub(occRow.ScheduledAt) > time.Duration(cur.ExecutionWindowSeconds)*time.Second
+	if !cur.Enabled || curRow.DeletedAt.Valid || !cur.TriggerConfig.WithinWindow(occRow.ScheduledAt) || !cur.TriggerConfig.WithinWindow(now) || deadlineMissed {
 		if _, err := q.MarkOccurrenceStatus(ctx, db.MarkOccurrenceStatusParams{Status: schedule.OccSkipped, ID: occRow.ID}); err != nil {
 			return err
+		}
+		if cur.NextRunAt == nil {
+			if err := disableWhenNoPending(ctx, q, occRow.ScheduleID); err != nil {
+				return err
+			}
 		}
 		return tx.Commit()
 	}
@@ -860,6 +922,11 @@ func (s *Scheduler) admitOne(ctx context.Context, occRow db.ScheduleOccurrence, 
 		if _, err := q.MarkOccurrenceStatus(ctx, db.MarkOccurrenceStatusParams{Status: schedule.OccFailed, ID: occRow.ID}); err != nil {
 			return err
 		}
+		if cur.NextRunAt == nil {
+			if err := disableWhenNoPending(ctx, q, occRow.ScheduleID); err != nil {
+				return err
+			}
+		}
 		if err := tx.Commit(); err != nil {
 			return err
 		}
@@ -872,7 +939,15 @@ func (s *Scheduler) admitOne(ctx context.Context, occRow db.ScheduleOccurrence, 
 		return err
 	}
 	if _, err := s.createRunForOccurrenceTx(ctx, tx, cur, occRow.ID, binding, now); err != nil {
+		if errors.Is(err, execution.ErrUserOutstandingExceeded) {
+			return nil
+		}
 		return err
+	}
+	if cur.NextRunAt == nil {
+		if err := disableWhenNoPending(ctx, q, occRow.ScheduleID); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -900,4 +975,19 @@ func (s *Scheduler) GetOccurrence(ctx context.Context, occID, userID int64, isSt
 func isDuplicate(err error) bool {
 	var me *mysql.MySQLError
 	return errors.As(err, &me) && me.Number == 1062
+}
+
+// Called under the schedule row lock only after the trigger has no future slot.
+// Explicit admin disable is separate; automatic exhaustion must not discard
+// another already accepted pending occurrence (including a manual run-now).
+func disableWhenNoPending(ctx context.Context, q db.Querier, scheduleID uint64) error {
+	n, err := q.CountPendingOccurrences(ctx, scheduleID)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err = q.SetScheduleEnabled(ctx, db.SetScheduleEnabledParams{Enabled: false, ID: scheduleID})
+	return err
 }

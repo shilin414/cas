@@ -564,10 +564,12 @@ func (s *Service) ExpireParkedExternalRuns(ctx context.Context, limit int) (int,
 		return 0, err
 	}
 	expired := 0
+	var failures error
 	for _, raw := range runIDs {
 		runID := mustID(raw)
 		ok, err := s.expireParkedExternalRunTx(ctx, runID)
 		if err != nil {
+			failures = errors.Join(failures, err)
 			s.Log.Error("parked-submission sweep failed", "run_id", runID.String(), slogKey("err"), err)
 			continue
 		}
@@ -575,7 +577,8 @@ func (s *Service) ExpireParkedExternalRuns(ctx context.Context, limit int) (int,
 			expired++
 		}
 	}
-	return expired, nil
+	// Preserve completed transactions/count, but never report partial failure as healthy.
+	return expired, failures
 }
 
 func (s *Service) expireParkedExternalRunTx(ctx context.Context, runID ids.ID) (bool, error) {

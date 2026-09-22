@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/shilin414/cas/backend-go/internal/operations"
 	"github.com/shilin414/cas/backend-go/internal/platform/config"
 	transporthttp "github.com/shilin414/cas/backend-go/internal/transport/http"
 	"github.com/shilin414/cas/backend-go/internal/transport/sse"
@@ -37,6 +38,7 @@ func NewServer(cfg *config.Config, a *App) *transporthttp.Server {
 		EnterpriseAccess: a.EnterpriseAccess,
 		AdminRBAC:        a.AdminRBAC,
 		AccessGroups:     a.AccessGroups,
+		Operations:       operations.NewService(a.DB),
 
 		Runs:               a.Runs,
 		Storage:            a.Storage,

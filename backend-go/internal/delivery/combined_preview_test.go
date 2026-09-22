@@ -16,6 +16,7 @@ import (
 	"time"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/shilin414/cas/backend-go/internal/execution"
 	genapi "github.com/shilin414/cas/backend-go/internal/gen/api"
 	db "github.com/shilin414/cas/backend-go/internal/gen/db"
@@ -26,7 +27,6 @@ import (
 	"github.com/shilin414/cas/backend-go/internal/platform/redisx"
 	"github.com/shilin414/cas/backend-go/internal/sharing"
 	transport "github.com/shilin414/cas/backend-go/internal/transport/http"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 func combinedConfig(t *testing.T, base string) *config.Config {
@@ -151,7 +151,7 @@ func TestCombinedPreviewConfiguredWorkerToPublicResult(t *testing.T) {
 			for i, target := range []Target{{Type: TargetUser, ID: "ou_1"}, {Type: TargetChat, ID: "oc_1"}} {
 				row := db.DeliveryExecution{ID: ids.New().Bytes(), RunID: runID.Bytes(), OccurrenceID: 5, SenderUserID: 7, TargetType: target.Type, TargetID: target.ID, Status: "pending", CreatedAt: now, UpdatedAt: now}
 				m.ExpectQuery("GetDeliveryExecutionByID").WithArgs(row.ID).WillReturnRows(previewRow(t, row))
-				m.ExpectExec("CASClaimDelivery").WithArgs(row.ID).WillReturnResult(sqlmock.NewResult(0, 1))
+				m.ExpectExec("CASClaimDelivery").WithArgs(row.ID, row.Attempt).WillReturnResult(sqlmock.NewResult(0, 1))
 				m.ExpectQuery("GetScheduleOccurrenceByID").WithArgs(5).WillReturnRows(previewRow(t, db.ScheduleOccurrence{ID: 5, ScheduleID: 3, ScheduledAt: now, CreatedAt: now, UpdatedAt: now}))
 				m.ExpectQuery("GetScheduleByID").WithArgs(3).WillReturnRows(previewRow(t, db.Schedule{ID: 3, Name: "每日巡检", OwnerUserID: 7, CreatedAt: now, UpdatedAt: now}))
 				m.ExpectQuery("GetRunByID").WithArgs(runID.Bytes()).WillReturnRows(previewRow(t, run))
@@ -169,7 +169,7 @@ func TestCombinedPreviewConfiguredWorkerToPublicResult(t *testing.T) {
 				}
 				// Model the persisted winner (also valid when another fan-out inserts first).
 				m.ExpectQuery("GetRunResultShare").WithArgs(string(runID.Bytes())).WillReturnRows(sqlmock.NewRows([]string{"token", "snapshot", "revoked_at"}).AddRow("token", snapshot, nil))
-				m.ExpectExec("CASFinishDelivery").WithArgs("succeeded", "", "", nil, "succeeded", row.ID).WillReturnResult(sqlmock.NewResult(0, 1))
+				m.ExpectExec("CASFinishDelivery").WithArgs("succeeded", "", "", nil, "succeeded", row.ID, row.Attempt+1).WillReturnResult(sqlmock.NewResult(0, 1))
 				msg := goredis.XMessage{ID: fmt.Sprintf("%d-0", i+1), Values: map[string]any{"run_id": ids.ID(row.ID).Hex()}}
 				worker.process(ctx, msg)
 				// A duplicate queue delivery must not send again or mint another share.

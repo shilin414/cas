@@ -61,6 +61,7 @@ export const ENTERPRISE_SECTIONS: EnterpriseNavSection[] = [
     title: '平台管理',
     items: [
       { key: 'ai-models', label: 'AI 模型管理', icon: <RobotOutlined />, requiredPermission: 'ai.model.read', requiredAnyPermissions: ['ai.model.read', 'ai.model.test', 'ai.model.log.read'] },
+      { key: 'operations', label: '运行中心', icon: <ClusterOutlined />, requiredPermission: 'run.monitor.read' },
       { key: 'providers', label: 'Provider', icon: <ApartmentOutlined />, requiredPermission: 'provider.read' },
       { key: 'audit', label: '审计日志', icon: <AuditOutlined />, requiredPermission: 'audit.read' },
     ],

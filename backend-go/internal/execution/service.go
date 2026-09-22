@@ -190,24 +190,13 @@ func (s *Service) CreateRun(ctx context.Context, in *CreateRunInput) (*Run, erro
 // NON-TERMINAL means "not cancelled/succeeded/failed" (第四轮 P2): the
 // cap is a concurrency bound on live work, not on two specific statuses.
 func (s *Service) CreateRunAdmitted(ctx context.Context, in *CreateRunInput, maxOutstanding int) (*Run, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
+	tx, err := BeginUserAdmissionTx(ctx, s.DB)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := db.New(tx)
-
-	if maxOutstanding > 0 && in.UserID != 0 {
-		if _, err := q.LockUserRow(ctx, uint64(in.UserID)); err != nil {
-			return nil, fmt.Errorf("user admission lock: %w", err)
-		}
-		n, err := q.CountOutstandingRunsByUser(ctx, sql.NullInt64{Int64: in.UserID, Valid: true})
-		if err != nil {
-			return nil, fmt.Errorf("user admission count: %w", err)
-		}
-		if n >= int64(maxOutstanding) {
-			return nil, ErrUserOutstandingExceeded
-		}
+	if err := CheckUserAdmissionInTx(ctx, tx, in.UserID, maxOutstanding); err != nil {
+		return nil, err
 	}
 	runID, err := s.CreateRunInTx(ctx, tx, in)
 	if err != nil {

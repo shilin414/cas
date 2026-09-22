@@ -92,6 +92,7 @@ func TestExpiredMisfireSkipsAndClearsNextRun(t *testing.T) {
 	m.ExpectExec("MarkOccurrenceStatus").WithArgs(schedule.OccSkipped, uint64(9)).WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectQuery("GetScheduleByID").WillReturnRows(mockRow(t, row))
 	// The slot at end itself is also missed; it must not be replayed after expiry.
+	m.ExpectQuery("CountPendingOccurrences").WithArgs(uint64(1)).WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(0))
 	m.ExpectExec("SetScheduleEnabled").WithArgs(false, uint64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectExec("TouchScheduleRunTimes").WithArgs(slot, nil, uint64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectCommit()

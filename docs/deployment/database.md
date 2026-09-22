@@ -1,7 +1,7 @@
 # MySQL 人工准备、SQL升级与首个管理员
 
 **必须由DBA/发布人审核并手动执行。本文命令没有对生产运行。** 不在CI、服务启动、Kubernetes InitContainer/Job或Helm hook中执行生产数据库调整。
-当前方言基线是MySQL5.7，迁移目录最高版本0044，共44个up文件。
+当前方言基线是MySQL5.7，迁移目录最高版本0045，共45个up文件。0045新增运行中心分页索引；本轮未执行，需要另行评审DDL与执行计划。
 
 ## 1. 操作前确认
 
@@ -25,7 +25,7 @@ SHOW TABLES LIKE 'schema_migrations';
 SELECT version, dirty FROM schema_migrations;
 ```
 
-若已有业务表但没有迁移表，先比对真实结构和历史，不直接伪造version=44。dirty=1时先处理失败变更。
+若已有业务表但没有迁移表，先比对真实结构和历史，不直接伪造version=45。dirty=1时先处理失败变更。
 
 ## 2. 新空库和账户SQL
 
@@ -74,8 +74,8 @@ import os
 start = int(os.environ['FROM_VERSION'])
 files = sorted(Path('backend-go/db/migrations').glob('*.up.sql'))
 versions = [int(f.name.split('_',1)[0]) for f in files]
-assert versions == list(range(1,45)), '迁移目录已变化，重新审阅目标版本'
-assert 0 <= start <= 44
+assert versions == list(range(1,46)), '迁移目录已变化，重新审阅目标版本'
+assert 0 <= start <= 45
 pending = [f for f,v in zip(files,versions) if v > start]
 assert pending, '没有待执行迁移'
 parts = ['-- REVIEW BEFORE EXECUTION. Never use mysql --force.\n',
@@ -95,7 +95,7 @@ print('Generated',len(pending),'migrations; NOT executed')
 PY
 ```
 
-完整DDL/DML来自[db/migrations](../../backend-go/db/migrations/)，不复制一份会漂移的表结构到文档。0042包含业务应用数据，0044包含无密钥GLM/OCR预设，审阅时不要只看建表。
+完整DDL/DML来自[db/migrations](../../backend-go/db/migrations/)，不复制一份会漂移的表结构到文档。0042包含业务应用数据，0044包含无密钥GLM/OCR预设，0045包含可能对大表产生DDL压力的索引，审阅时不要只看建表。
 
 ## 5. 人工执行与验收
 

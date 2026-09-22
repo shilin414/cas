@@ -144,7 +144,7 @@ type Querier interface {
 	// CAS claim: one delivery worker wins; 0 rows = someone else got it.
 	// Only pending→sending: a duplicate stream message can never re-claim a
 	// row another worker is already sending (no double Feishu messages).
-	CASClaimDelivery(ctx context.Context, id []byte) (sql.Result, error)
+	CASClaimDelivery(ctx context.Context, arg CASClaimDeliveryParams) (sql.Result, error)
 	// CAS claim: exactly one worker wins; affected_rows == 1 means success.
 	// lease_epoch bump is the fencing token: every later write by the winning
 	// worker must match the new epoch, so stale workers lose ownership.
@@ -603,6 +603,8 @@ type Querier interface {
 	GetPendingOwnedAttachment(ctx context.Context, arg GetPendingOwnedAttachmentParams) (RuntimeAttachment, error)
 	// ───────────────────────────────────────────────────────────── catalog ──
 	GetProviderByKey(ctx context.Context, providerKey string) (Provider, error)
+	// Read the authoritative policy under the admission lock; never widen on error.
+	GetProviderCapacityForUpdate(ctx context.Context, providerKey string) (uint32, error)
 	// Idempotent re-acquire: the SAME ownership (run, claim epoch, token)
 	// already holds a slot → refresh it instead of consuming a second one.
 	GetProviderSlotForUpdate(ctx context.Context, arg GetProviderSlotForUpdateParams) (uint64, error)
@@ -705,7 +707,7 @@ type Querier interface {
 	// Occurrence admission queue (overlap=queue semantics): pending rows are
 	// converted into runs once the schedule has no active execution.
 	// FIFO per schedule: scheduled_at first, id as the tiebreaker.
-	ListAdmissiblePendingOccurrences(ctx context.Context, limit int32) ([]ScheduleOccurrence, error)
+	ListAdmissiblePendingOccurrences(ctx context.Context, arg ListAdmissiblePendingOccurrencesParams) ([]ScheduleOccurrence, error)
 	ListAllRunEvents(ctx context.Context, runID []byte) ([]RunEvent, error)
 	// True keyset pagination for the catalog (执行报告 §14–§21, 2026-09-17).
 	//

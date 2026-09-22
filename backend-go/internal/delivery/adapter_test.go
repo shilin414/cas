@@ -78,7 +78,7 @@ type recordingFeishu struct {
 	lastIDType, lastToken, lastReceiveID, lastMsgType, lastContent string
 }
 
-func (r *recordingFeishu) SendIMMessage(_ context.Context, token, receiveIDType, receiveID, msgType, content string) error {
+func (r *recordingFeishu) SendIMMessageWithUUID(_ context.Context, token, receiveIDType, receiveID, msgType, content, uuid string) error {
 	r.lastToken, r.lastIDType, r.lastReceiveID = token, receiveIDType, receiveID
 	r.lastMsgType, r.lastContent = msgType, content
 	return nil
@@ -144,9 +144,9 @@ type rejectingNativeCard struct {
 	calls int
 }
 
-func (f *rejectingNativeCard) SendIMMessage(ctx context.Context, token, idType, id, kind, content string) error {
+func (f *rejectingNativeCard) SendIMMessageWithUUID(ctx context.Context, token, idType, id, kind, content, uuid string) error {
 	f.calls++
-	_ = f.recordingFeishu.SendIMMessage(ctx, token, idType, id, kind, content)
+	_ = f.recordingFeishu.SendIMMessageWithUUID(ctx, token, idType, id, kind, content, uuid)
 	if f.calls == 1 {
 		return &identity.FeishuAPIError{Code: 230099, Msg: "unsupported table"}
 	}

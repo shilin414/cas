@@ -81,6 +81,7 @@ type Server struct {
 	EnterpriseAccess *enterpriseaccess.Service
 	AdminRBAC        *adminrbac.Service
 	AccessGroups     *accessgroup.Service
+	Operations       operationsBackend
 
 	Runs    *execution.Service
 	Storage storage.Storage
@@ -214,6 +215,7 @@ func (s *Server) Router() http.Handler {
 	r.Get("/metrics", s.Metric.Handler().ServeHTTP)
 
 	// Extensible enterprise sync routes; legacy contract routes remain generated below.
+	s.registerOperationsRoutes(r)
 	s.registerSyncTargetRoutes(r)
 	s.registerBusinessAppRoutes(r)
 
@@ -246,6 +248,13 @@ func normalizeRoute(r *http.Request) string {
 		p = p[i:]
 	}
 	switch {
+	case strings.HasPrefix(p, "/api/v2/admin/operations/providers/"):
+		return "/api/v2/admin/operations/providers/{provider}/capacity"
+	case strings.HasPrefix(p, "/api/v2/admin/operations/"):
+		if p == "/api/v2/admin/operations/overview" || p == "/api/v2/admin/operations/runs" {
+			return p
+		}
+		return "/api/v2/admin/operations/{unknown}"
 	case strings.HasPrefix(p, "/api/v2/admin/ai-models/"):
 		parts := strings.Split(strings.TrimPrefix(p, "/api/v2/admin/ai-models/"), "/")
 		if len(parts) > 1 {

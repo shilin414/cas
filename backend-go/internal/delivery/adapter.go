@@ -71,7 +71,7 @@ type UATResolver interface {
 
 // feishuSender is the identity.FeishuClient surface the adapter needs.
 type feishuSender interface {
-	SendIMMessage(ctx context.Context, token, receiveIDType, receiveID, msgType, content string) error
+	SendIMMessageWithUUID(ctx context.Context, token, receiveIDType, receiveID, msgType, content, uuid string) error
 }
 
 // FeishuSender sends as the schedule owner via Feishu IM.
@@ -119,7 +119,7 @@ func (s *FeishuSender) Send(ctx context.Context, req DeliveryRequest) error {
 		return fmt.Errorf("delivery: encode preview card: %w", err)
 	}
 	fallback, err := identity.SendCardWithFallback(ctx, prepared.Content, prepared.Fallback, func(sendCtx context.Context, content string) error {
-		return s.Client.SendIMMessage(sendCtx, token, idType, req.Target.ID, "interactive", content)
+		return s.Client.SendIMMessageWithUUID(sendCtx, token, idType, req.Target.ID, "interactive", content, req.IdempotencyKey)
 	})
 	if fallback || prepared.Downgraded {
 		slog.Warn("delivery card downgraded to plain preview", "execution_id", req.ExecutionID.String(), "fallback_sent", err == nil)

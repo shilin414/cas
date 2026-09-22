@@ -50,13 +50,16 @@ func TestWorkerStaleAttemptCannotChangeReplacementControl(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			old := ExecutionOwnership{RunID: ids.New(), WorkerID: "worker", LeaseEpoch: 1, LeaseToken: ids.New()}
 			current := old
+			current.LeaseEpoch++
+			current.LeaseToken = ids.New()
+			stale := current
 			switch change {
 			case "epoch":
-				current.LeaseEpoch++
+				stale.LeaseEpoch--
 			case "token":
-				current.LeaseToken = ids.New()
+				stale.LeaseToken = ids.New()
 			case "worker":
-				current.WorkerID = "replacement-worker"
+				stale.WorkerID = "stale-worker"
 			}
 			w := &Worker{}
 			_, oldCancel := context.WithCancel(context.Background())
@@ -68,11 +71,11 @@ func TestWorkerStaleAttemptCannotChangeReplacementControl(t *testing.T) {
 			replacement := w.inflight[current.RunID]
 			slot := newProviderSlot("test", current)
 			w.attachProviderSlot(current, slot)
-			w.attachProviderSlot(old, newProviderSlot("test", old))
+			w.attachProviderSlot(stale, newProviderSlot("test", stale))
 			if replacement.slot != slot {
 				t.Error("stale slot attachment overwrote replacement attempt's reservation")
 			}
-			w.trackInflight(old, nil, time.Time{})
+			w.trackInflight(stale, nil, time.Time{})
 			if w.inflight[current.RunID] != replacement {
 				t.Error("stale attempt cleanup removed replacement heartbeat registration")
 			}

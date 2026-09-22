@@ -20,6 +20,7 @@
 配套文件在 [deploy](../deploy/)；全部是需填参数并审核的模板，不代表生产已经部署。
 
 ## 功能说明
+- [管理员运行中心与并发可观测性](operations-center.md)
 - [飞书分享卡片：表格、智能体和降级](feishu-share-cards.md)
 - [Aily 执行过程与最终回复：边界和排查](aily-response-boundaries.md)
 - [自动化编辑器](automation-editor.md)

@@ -23,6 +23,7 @@ import (
 	"github.com/shilin414/cas/backend-go/internal/delivery"
 	"github.com/shilin414/cas/backend-go/internal/execution"
 	"github.com/shilin414/cas/backend-go/internal/platform/logging"
+	"github.com/shilin414/cas/backend-go/internal/platform/rolemonitor"
 	"github.com/shilin414/cas/backend-go/internal/platform/telemetry"
 	"github.com/shilin414/cas/backend-go/internal/workerdispatch"
 )
@@ -35,6 +36,11 @@ func main() {
 	cfg, err := app.LoadConfig()
 	if err != nil {
 		slog.Error("config", "err", err)
+		os.Exit(1)
+	}
+	monitorConfig, err := rolemonitor.ParseEnv("WORKER", os.Getenv)
+	if err != nil {
+		slog.Error("worker monitor config", "err", err)
 		os.Exit(1)
 	}
 	logger := logging.New(cfg.LogLevel)
@@ -86,33 +92,22 @@ func main() {
 			"concurrency", cfg.Runner.Concurrency)
 	}
 
-	var wg sync.WaitGroup
-
-	// Outbox relay: MySQL → Redis Streams (§22). Also routes delivery
-	// outbox events to the feishu_delivery stream.
-	relay := execution.NewRelay(a.Runs, a.Redis, 200)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		relay.Run(runCtx, cfg.Runner.RelayInterval)
-	}()
-
-	if *provider == delivery.ProviderKey {
-		// Delivery consumer pool: scheduled-run results → Feishu IM.
-		worker := delivery.NewWorker(a.DB, a.Redis, cfg.Runner.WorkerID,
+	// Monitoring is read-only and starts before any business consumer. Invalid or
+	// occupied internal listeners fail startup rather than silently losing probes.
+	var loops map[string]rolemonitor.LoopBudget
+	var executionWorker *execution.Worker
+	var deliveryWorker *delivery.Worker
+	role := "worker"
+	sampler := rolemonitor.SQLSampler{DB: a.DB, Provider: *provider}
+	if plan == nil {
+		role = "delivery_worker"
+		deliveryWorker = delivery.NewWorker(a.DB, a.Redis, cfg.Runner.WorkerID,
 			a.DeliverySender, a.DeliveryLimiter, logger, a.Metrics)
-		worker.PublicBaseURL = cfg.PublicBaseURL
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			logger.Info("delivery worker consuming", "queue", delivery.ProviderKey)
-			worker.Run(runCtx)
-		}()
+		deliveryWorker.PublicBaseURL = cfg.PublicBaseURL
+		loops = deliveryWorker.MonitoringLoopBudgets()
+		sampler.Delivery = true
 	} else {
-		// Provider worker pool (Batch 5 §25): the plan owns the Handler and
-		// the provider-wide slots — this binary never names a concrete
-		// executor anymore.
-		worker := &execution.Worker{
+		executionWorker = &execution.Worker{
 			Svc:             a.Runs,
 			RDB:             a.Redis,
 			Provider:        plan.Provider,
@@ -128,60 +123,99 @@ func main() {
 			Gate:            app.NewExecutionGate(a.Catalog),
 			PriorityWeights: cfg.Runner.PriorityWeights,
 		}
+		loops = executionWorker.MonitoringLoopBudgets()
+		if plan.Slots != nil {
+			sampler.IncludeCapacity = true
+		}
+	}
+	if err := monitorConfig.ValidateLoopBudgets(loops); err != nil {
+		logger.Error("worker monitor loop budget", "err", err)
+		os.Exit(1)
+	}
+	redisProbe, err := rolemonitor.NewRedisProbe(monitorConfig, a.Redis.UniversalClient)
+	if err != nil {
+		logger.Error("worker Redis probe init", "err", err)
+		os.Exit(1)
+	}
+	defer redisProbe.Close()
+	monitor, err := rolemonitor.New(monitorConfig, role, *provider, loops, a.Metrics.Registry, rolemonitor.Dependencies{
+		DB:    a.DB.PingContext,
+		Redis: redisProbe.Ping,
+		Sample: func(ctx context.Context) (rolemonitor.Snapshot, error) {
+			value, err := sampler.Sample(ctx)
+			if err != nil {
+				return value, err
+			}
+			if err = ctx.Err(); err != nil {
+				return rolemonitor.Snapshot{}, err
+			}
+			// Keep existing dashboard names compatible; never reset them on failure.
+			// New studio_role_sample_* series are the freshness authority.
+			a.Metrics.OutboxBacklog.Set(float64(value.PendingOutbox))
+			if plan != nil {
+				a.Metrics.QueueDepth.WithLabelValues(plan.Provider).Set(float64(value.Queued))
+				degraded := 0.0
+				if plan.Health != nil && plan.Health.LimiterDegraded() {
+					degraded = 1
+				}
+				a.Metrics.ProviderLimiterDegraded.Set(degraded)
+				if value.HasCapacity {
+					a.Metrics.ProviderInflight.WithLabelValues(plan.Provider).Set(float64(value.Effective))
+					a.Metrics.ProviderCapacityDepth.WithLabelValues(plan.Provider, telemetry.CapacityEffective).Set(float64(value.Effective))
+					a.Metrics.ProviderCapacityDepth.WithLabelValues(plan.Provider, telemetry.CapacityControlled).Set(float64(value.Controlled))
+					a.Metrics.ProviderCapacityDepth.WithLabelValues(plan.Provider, telemetry.CapacityUncontrolled).Set(float64(value.Uncontrolled))
+				}
+			}
+			return value, nil
+		},
+	})
+	if err != nil {
+		logger.Error("worker monitor init", "err", err)
+		os.Exit(1)
+	}
+	monitorErrors, err := monitor.Start(runCtx)
+	if err != nil {
+		logger.Error("worker monitor listener", "err", err)
+		os.Exit(1)
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := <-monitorErrors; err != nil {
+			logger.Error("worker monitor stopped", "err", err)
+			stop()
+		}
+	}()
+
+	// Outbox relay: MySQL → Redis Streams (§22). Also routes delivery
+	// outbox events to the feishu_delivery stream.
+	relay := execution.NewRelay(a.Runs, a.Redis, 200)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		relay.Run(runCtx, cfg.Runner.RelayInterval)
+	}()
+
+	if *provider == delivery.ProviderKey {
+		// Delivery consumer pool: scheduled-run results → Feishu IM.
+		deliveryWorker.ObserveLoop = monitor.ObserveLoop
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			logger.Info("delivery worker consuming", "queue", delivery.ProviderKey)
+			deliveryWorker.Run(runCtx)
+		}()
+	} else {
+		// Provider worker pool (Batch 5 §25): the plan owns the Handler and
+		// the provider-wide slots — this binary never names a concrete
+		// executor anymore.
+		executionWorker.ObserveLoop = monitor.ObserveLoop
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			logger.Info("worker consuming", "provider", plan.Provider, "concurrency", cfg.Runner.Concurrency)
-			worker.Run(runCtx)
-		}()
-	}
-
-	// Provider execution health monitor (Batch 5 §28/§29): only an
-	// execution worker has a provider plan, so only it samples provider
-	// capacity and limiter health — the delivery worker no longer samples
-	// Aily state it does not use.
-	if plan != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-runCtx.Done():
-					return
-				case <-ticker.C:
-					degraded := 0.0
-					if plan.Health != nil && plan.Health.LimiterDegraded() {
-						degraded = 1.0
-					}
-					a.Metrics.ProviderLimiterDegraded.Set(degraded)
-					// Provider capacity, all three faces (第九轮补丁 3.3-A §二十):
-					// effective is the bound admission enforces; controlled is what
-					// a live worker owns; uncontrolled is real provider work nobody
-					// owns. effective ≈ controlled and uncontrolled ≈ 0 is healthy —
-					// a sustained uncontrolled rise is the alert.
-					if plan.Slots != nil {
-						if depth, err := plan.Slots.Depth(runCtx); err == nil {
-							a.Metrics.ProviderInflight.WithLabelValues(plan.Provider).Set(float64(depth))
-							a.Metrics.ProviderCapacityDepth.
-								WithLabelValues(plan.Provider, telemetry.CapacityEffective).Set(float64(depth))
-						}
-						if depth, err := plan.Slots.ControlledDepth(runCtx); err == nil {
-							a.Metrics.ProviderCapacityDepth.
-								WithLabelValues(plan.Provider, telemetry.CapacityControlled).Set(float64(depth))
-						}
-						if depth, err := plan.Slots.UncontrolledDepth(runCtx); err == nil {
-							a.Metrics.ProviderCapacityDepth.
-								WithLabelValues(plan.Provider, telemetry.CapacityUncontrolled).Set(float64(depth))
-							if depth > 0 {
-								logger.Warn("provider capacity is uncontrolled: real provider work has no live slot",
-									"provider", plan.Provider, "uncontrolled_depth", depth)
-							}
-						}
-					}
-				}
-			}
+			executionWorker.Run(runCtx)
 		}()
 	}
 

@@ -36,10 +36,12 @@ func (s *Service) RecoverExpiredLeases(ctx context.Context, limit int) (int, err
 		return 0, err
 	}
 	recovered := 0
+	var failures error
 	for _, raw := range runIDs {
 		runID := mustID(raw)
 		ok, err := s.RecoverExpiredLease(ctx, runID)
 		if err != nil {
+			failures = errors.Join(failures, err)
 			s.Log.Error("reaper recovery failed", "run_id", runID.String(), slogKey("err"), err)
 			continue
 		}
@@ -47,7 +49,8 @@ func (s *Service) RecoverExpiredLeases(ctx context.Context, limit int) (int, err
 			recovered++
 		}
 	}
-	return recovered, nil
+	// Preserve completed transactions/count, but never report partial failure as healthy.
+	return recovered, failures
 }
 
 // RecoverExpiredLease applies the same atomic recovery transaction to one

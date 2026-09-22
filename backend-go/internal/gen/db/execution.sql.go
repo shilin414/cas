@@ -1536,6 +1536,18 @@ func (q *Queries) GetPendingOwnedAttachment(ctx context.Context, arg GetPendingO
 	return i, err
 }
 
+const getProviderCapacityForUpdate = `-- name: GetProviderCapacityForUpdate :one
+SELECT max_inflight FROM providers WHERE provider_key = ? FOR UPDATE
+`
+
+// Read the authoritative policy under the admission lock; never widen on error.
+func (q *Queries) GetProviderCapacityForUpdate(ctx context.Context, providerKey string) (uint32, error) {
+	row := q.db.QueryRowContext(ctx, getProviderCapacityForUpdate, providerKey)
+	var max_inflight uint32
+	err := row.Scan(&max_inflight)
+	return max_inflight, err
+}
+
 const getProviderSlotForUpdate = `-- name: GetProviderSlotForUpdate :one
 SELECT id FROM provider_execution_slots
 WHERE provider = ? AND run_id = ? AND lease_epoch = ? AND lease_token = ?

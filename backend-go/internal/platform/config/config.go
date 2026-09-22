@@ -165,9 +165,9 @@ type FeishuConfig struct {
 type AilyConfig struct {
 	BaseURL              string
 	StartRateLimitPerSec int
-	// MaxInflight is the BOOTSTRAP / override value for the provider-wide
-	// concurrency cap. The provider catalog row (providers.max_inflight)
-	// is authoritative when present — see app.Build.
+	// MaxInflight is retained for configuration compatibility. Production
+	// worker admission always uses providers.max_inflight; this value never
+	// overrides or substitutes for a missing/unavailable catalog policy.
 	MaxInflight    int
 	PollBackoff    []time.Duration
 	StreamTimeout  time.Duration
