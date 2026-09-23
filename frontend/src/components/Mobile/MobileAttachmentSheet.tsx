@@ -61,7 +61,7 @@ const MobileAttachmentSheet: React.FC<MobileAttachmentSheetProps> = ({
           图片 / 文件
         </button>
         <p className="mobile-attachment-sheet__hint">
-          支持 png / jpg / pdf，单次最多 8 个；图片不超过 5MB，其他文件不超过 40MB
+          支持 png / jpg / pdf，单次最多 8 个；超过 5MB 的图片将自动压缩，其他文件不超过 40MB
         </p>
       </div>
     </div>

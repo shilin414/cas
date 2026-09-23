@@ -37,6 +37,14 @@ import {
   validateAttachment,
 } from '@/services/runApi';
 import {
+  compressImage,
+  ImageCompressionError,
+  isCompressibleImage,
+} from '@/lib/compressImage';
+
+/** 附件大小展示：MB 一位小数（压缩提示共用）。 */
+const mbLabel = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
+import {
   buildShareUrl,
   createConversationShare,
 } from '@/services/shareApi';
@@ -430,29 +438,45 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
 
   const handleFiles = async (files: FileList | null) => {
     if (!files?.length || !effectiveApplicationId) return;
-    const next: PendingUpload[] = [];
     for (const file of Array.from(files)) {
+      if (pendingUploads.length > ATTACHMENT_LIMITS.maxPerRun) break;
       const key = `${file.name}-${Date.now()}-${Math.random()}`;
-      const violation = validateAttachment(file);
-      if (violation) {
-        antdMessage.warning(`${violation.name}：${violation.reason}`);
-        continue;
+      // 超限图片走本地压缩（原图不上传，所以不受 40MB 上传体积约束）；
+      // 其余文件照旧预检。压缩期间 chip 已经在转圈，用户看得见进度。
+      const needsCompress = isCompressibleImage(file);
+      if (!needsCompress) {
+        const violation = validateAttachment(file);
+        if (violation) {
+          antdMessage.warning(`${violation.name}：${violation.reason}`);
+          continue;
+        }
       }
-      if (pendingUploads.length + next.length + 1 > ATTACHMENT_LIMITS.maxPerRun) {
+      if (pendingUploads.length > ATTACHMENT_LIMITS.maxPerRun - 1) {
         antdMessage.warning(`单次最多 ${ATTACHMENT_LIMITS.maxPerRun} 个附件`);
         break;
       }
-      next.push({ key, name: file.name, state: 'uploading' });
-      setPendingUploads((current) => [...current, ...next]);
+      // 单个 chip 立即入列：await 上传期间用户可以继续操作输入区。
+      setPendingUploads((current) => [...current, { key, name: file.name, state: 'uploading' }]);
       try {
-        const attachment = await uploadAttachment(effectiveApplicationId, file);
+        let uploadFile = file;
+        if (needsCompress) {
+          const compressed = await compressImage(file);
+          uploadFile = compressed;
+          antdMessage.info(
+            `${file.name} 已自动压缩：${mbLabel(file.size)} MB → ${mbLabel(compressed.size)} MB`,
+          );
+        }
+        const attachment = await uploadAttachment(effectiveApplicationId, uploadFile);
         setPendingUploads((current) => current.map((item) => (
           item.key === key
             ? { ...item, state: 'ready', attachmentId: attachment.id }
             : item
         )));
-      } catch {
-        antdMessage.error(`${file.name} 上传失败`);
+      } catch (error) {
+        const reason = error instanceof ImageCompressionError
+          ? error.message
+          : `${file.name} 上传失败`;
+        antdMessage.error(reason);
         setPendingUploads((current) => current.filter((item) => item.key !== key));
       }
     }

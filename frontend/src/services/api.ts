@@ -6,8 +6,8 @@ export const api = {
   get: <T = any>(url: string, params?: any, options?: AxiosRequestConfig): Promise<T> =>
     axiosInstance.get(url, { ...options, params }) as Promise<T>,
 
-  post: <T = any>(url: string, data?: any): Promise<T> =>
-    axiosInstance.post(url, data) as Promise<T>,
+  post: <T = any>(url: string, data?: any, options?: AxiosRequestConfig): Promise<T> =>
+    axiosInstance.post(url, data, options) as Promise<T>,
 
   put: <T = any>(url: string, data?: any): Promise<T> =>
     axiosInstance.put(url, data) as Promise<T>,

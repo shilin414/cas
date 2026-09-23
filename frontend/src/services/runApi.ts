@@ -703,8 +703,11 @@ export async function uploadAttachment(
   const form = new FormData();
   form.append('file', file);
   form.append('type', file.type.startsWith('image/') ? 'image' : 'file');
+  // Uploads bypass the instance's 10s default: a 40MB file needs ~35s on a
+  // 10Mbps uplink, and the compressed-image path also adds canvas work
+  // before the request starts.
   const record = await api.post<RuntimeAttachmentRecord>(
-    `/v2/applications/${applicationId}/attachments`, form,);
+    `/v2/applications/${applicationId}/attachments`, form, { timeout: 60000 });
   return {
     id: record.id,
     name: record.name,
