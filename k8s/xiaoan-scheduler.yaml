@@ -1,0 +1,52 @@
+# xiaoan-scheduler — schedule scanner, singleton by design.
+# Recreate strategy: a rolling update would briefly run two schedulers.
+# NOTE: do NOT add `--migrate` to command; migrations are run manually by ops.
+# No HTTP probe: scheduler's rolemonitor listener is loopback-only unless
+# SCHEDULER_MONITOR_ADDR is explicitly configured.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xiaoan-scheduler
+  namespace: eboat-ai-ns
+  labels:
+    app: xiaoan-scheduler
+    app.kubernetes.io/part-of: xiaoan-platform
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: xiaoan-scheduler
+  template:
+    metadata:
+      labels:
+        app: xiaoan-scheduler
+    spec:
+      imagePullSecrets:
+        - name: harbor-secret
+      containers:
+        - name: xiaoan-scheduler
+          image: harbor.hengan.com:8086/eboat2/xiaoan-backend:REPLACE_WITH_IMAGE_TAG
+          command: [scheduler]
+          envFrom:
+            - configMapRef:
+                name: xiaoan-config
+            - secretRef:
+                name: xiaoan-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: xiaoan-storage
+              mountPath: /app/data/storage
+      volumes:
+        - name: xiaoan-storage
+          nfs:
+            server: 192.168.212.165
+            path: /db/k8s-ai-nfs/xiaoan-platform-data-test
+            readOnly: false

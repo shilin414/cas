@@ -19,9 +19,22 @@ export function readDeployment(env = process.env) {
   return { basePath: normalizeBasePath(env.APP_BASE_PATH ?? config.basePath) };
 }
 
-export function renderNginx(basePath) {
+// Upstream names differ between dev (`api`/`stream` on localhost) and
+// Kubernetes (`xiaoan-api`/`xiaoan-stream` in eboat-ai-ns). Fail closed on
+// malformed values: this output is included verbatim by Nginx.
+function upstreamVariable(env, name, fallback) {
+  const value = env[name] || fallback;
+  if (!/^[A-Za-z0-9_.-]+:(\d{1,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$/.test(value)) {
+    throw new Error(`${name} must look like host:port (port 1-65535), got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+export function renderNginx(basePath, env = process.env) {
   const base = normalizeBasePath(basePath);
   const prefix = base.slice(0, -1);
+  const apiUpstream = upstreamVariable(env, 'NGINX_API_UPSTREAM', 'api:8080');
+  const streamUpstream = upstreamVariable(env, 'NGINX_STREAM_UPSTREAM', 'stream:8081');
   return `# Generated from deployment.json; do not edit this build output.
 map $http_upgrade $connection_upgrade {
   default upgrade;
@@ -46,7 +59,7 @@ ${prefix ? `  location = ${prefix} { return 308 ${base}$is_args$args; }
   # A 20 MiB file needs multipart header/boundary headroom. Other APIs retain 20m.
   location ${base}api/v2/admin/ai-models/ {
     client_max_body_size 21m;
-    proxy_pass http://api:8080/api/v2/admin/ai-models/;
+    proxy_pass http://${apiUpstream}/api/v2/admin/ai-models/;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -55,7 +68,7 @@ ${prefix ? `  location = ${prefix} { return 308 ${base}$is_args$args; }
   }
   location = ${base}api { return 308 ${base}api/$is_args$args; }
   location ${base}api/ {
-    proxy_pass http://api:8080/api/;
+    proxy_pass http://${apiUpstream}/api/;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -65,7 +78,7 @@ ${prefix ? `  location = ${prefix} { return 308 ${base}$is_args$args; }
   # Only stream requests go to the gateway; cancel/detail stay on the API pool.
   location ~ ^${base}api/v2/runs/[^/]+/stream$ {
     rewrite ^${base}(.*)$ /$1 break;
-    proxy_pass http://stream:8081;
+    proxy_pass http://${streamUpstream};
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header Connection "";
@@ -79,7 +92,7 @@ ${prefix ? `  location = ${prefix} { return 308 ${base}$is_args$args; }
     add_header X-Accel-Buffering no always;
   }
   location ${base}ws {
-    proxy_pass http://api:8080/ws;
+    proxy_pass http://${apiUpstream}/ws;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;

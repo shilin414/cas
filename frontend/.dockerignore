@@ -2,7 +2,19 @@
 .env.*
 !.env.example
 node_modules/
-dist/
 coverage/
 *.log
 .git/
+src/
+scripts/
+public/
+package*.json
+index.html
+vite.config.ts
+vitest.config.ts
+tsconfig*.json
+tailwind.config.js
+postcss.config.js
+admin-mockup.html
+design-mockup.html
+# dist/ is NOT ignored: the xiaoan-ui image build consumes the Jenkins-built dist.

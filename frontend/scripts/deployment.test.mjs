@@ -14,12 +14,25 @@ for (const base of ['/xiaoan-platform/', '/other/nested/', '/']) {
     assert.ok(config.includes('absolute_redirect off;'), 'canonical redirects must preserve external scheme and published port');
     assert.ok(config.includes(`location ${base}api/`));
     assert.ok(config.includes(`try_files $uri $uri/ ${base}index.html`));
-    assert.ok(config.includes('proxy_pass http://api:8080/api/;'));
+    assert.ok(config.includes('proxy_pass http://api:8080/api/;'), 'dev default upstream');
     assert.ok(config.includes(`location ~ ^${base}api/v2/runs/[^/]+/stream$`));
     assert.ok(config.includes('proxy_buffering off;'));
     assert.ok(config.includes('proxy_set_header Upgrade $http_upgrade;'));
     assert.ok(config.includes(`location ${base}assets/ { try_files $uri =404; }`));
     assert.equal((config.match(/location \/ \{/g) || []).length, 1);
+  });
+  test(`kubernetes upstreams are selectable at ${base}`, () => {
+    const config = renderNginx(base, {NGINX_API_UPSTREAM: 'xiaoan-api:8080', NGINX_STREAM_UPSTREAM: 'xiaoan-stream:8081'});
+    assert.ok(config.includes('proxy_pass http://xiaoan-api:8080/api/;'));
+    assert.ok(config.includes('proxy_pass http://xiaoan-stream:8081;'));
+    assert.ok(config.includes('proxy_pass http://xiaoan-api:8080/ws;'));
+    assert.ok(!config.includes('proxy_pass http://api:8080'));
+  });
+  test(`malformed upstreams fail closed at ${base}`, () => {
+    for (const value of ['api:8080/api', 'api 8080', 'api:', 'http://api:8080', 'api:99999']) {
+      assert.throws(() => renderNginx(base, {NGINX_API_UPSTREAM: value}), undefined, `NGINX_API_UPSTREAM=${value}`);
+      assert.throws(() => renderNginx(base, {NGINX_STREAM_UPSTREAM: value}), undefined, `NGINX_STREAM_UPSTREAM=${value}`);
+    }
   });
 }
 test('shared file can be overridden explicitly', () => {
@@ -30,7 +43,7 @@ for (const base of ['/xiaoan-platform/', '/other/nested/', '/']) {
     const config = renderNginx(base);
     assert.ok(config.includes(`location ${base}ocr-assets/ { try_files $uri =404; }`));
     assert.ok(config.includes(`location ${base}api/v2/admin/ai-models/ {\n    client_max_body_size 21m;`));
-    assert.ok(config.includes('proxy_pass http://api:8080/api/v2/admin/ai-models/;'));
+    assert.ok(config.includes('proxy_pass http://api:8080/api/v2/admin/ai-models/;'), 'dev default upstream');
     assert.ok(config.includes('client_max_body_size 20m;'), 'unrelated APIs keep their existing limit');
   });
 }

@@ -1,0 +1,23 @@
+# Higress entrypoint: only Host + Path → xiaoan-ui-service.
+# All internal routing (API → xiaoan-api, SSE → xiaoan-stream, WS → xiaoan-api)
+# stays inside the xiaoan-ui Nginx container (first-version principle).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: xiaoan-ui-higress
+  namespace: eboat-ai-ns
+  labels:
+    app.kubernetes.io/part-of: xiaoan-platform
+spec:
+  ingressClassName: higress
+  rules:
+    - host: ai.hengan.com
+      http:
+        paths:
+          - path: /xiaoan-platform
+            pathType: Prefix
+            backend:
+              service:
+                name: xiaoan-ui-service
+                port:
+                  number: 80

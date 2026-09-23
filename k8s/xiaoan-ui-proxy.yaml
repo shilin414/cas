@@ -1,0 +1,66 @@
+# xiaoan-ui — React static assets + Nginx reverse proxy (API/SSE/WS routing).
+# The image's nginx.generated.conf is produced at Jenkins build time with
+# NGINX_API_UPSTREAM=xiaoan-api:8080 / NGINX_STREAM_UPSTREAM=xiaoan-stream:8081
+# and points at these Service names.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xiaoan-ui
+  namespace: eboat-ai-ns
+  labels:
+    app: xiaoan-ui
+    app.kubernetes.io/part-of: xiaoan-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: xiaoan-ui
+  template:
+    metadata:
+      labels:
+        app: xiaoan-ui
+    spec:
+      imagePullSecrets:
+        - name: harbor-secret
+      containers:
+        - name: xiaoan-ui
+          image: harbor.hengan.com:8086/eboat2/xiaoan-ui:REPLACE_WITH_IMAGE_TAG
+          ports:
+            - name: http
+              containerPort: 80
+          livenessProbe:
+            httpGet:
+              path: /xiaoan-platform/
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /xiaoan-platform/
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: xiaoan-ui-service
+  namespace: eboat-ai-ns
+  labels:
+    app: xiaoan-ui
+spec:
+  selector:
+    app: xiaoan-ui
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

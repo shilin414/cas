@@ -1,0 +1,49 @@
+# xiaoan-worker-aily — execution worker consuming the feishu_aily provider queue.
+# No Service: workers are not addressable. No HTTP probe: the rolemonitor
+# listener is disabled unless WORKER_MONITOR_ADDR is set (defaults to loopback-only,
+# so K8s probes cannot reach it by design).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xiaoan-worker-aily
+  namespace: eboat-ai-ns
+  labels:
+    app: xiaoan-worker-aily
+    app.kubernetes.io/part-of: xiaoan-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xiaoan-worker-aily
+  template:
+    metadata:
+      labels:
+        app: xiaoan-worker-aily
+    spec:
+      imagePullSecrets:
+        - name: harbor-secret
+      containers:
+        - name: xiaoan-worker-aily
+          image: harbor.hengan.com:8086/eboat2/xiaoan-backend:REPLACE_WITH_IMAGE_TAG
+          command: [worker, --provider=feishu_aily]
+          envFrom:
+            - configMapRef:
+                name: xiaoan-config
+            - secretRef:
+                name: xiaoan-secret
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: xiaoan-storage
+              mountPath: /app/data/storage
+      volumes:
+        - name: xiaoan-storage
+          nfs:
+            server: 192.168.212.165
+            path: /db/k8s-ai-nfs/xiaoan-platform-data-test
+            readOnly: false
