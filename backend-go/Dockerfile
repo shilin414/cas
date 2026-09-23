@@ -8,6 +8,12 @@ WORKDIR /build
 
 RUN apk add --no-cache git ca-certificates
 
+# Corporate network cannot reach proxy.golang.org; use the China mirror with
+# direct VCS fallback. Override per build with --build-arg GOPROXY=... if the
+# company later runs an internal module proxy.
+ARG GOPROXY=https://goproxy.cn,https://goproxy.io,direct
+ENV GOPROXY=${GOPROXY}
+
 # Dependency layer first so source edits do not invalidate `go mod download`.
 COPY go.mod go.sum ./
 RUN go mod download
