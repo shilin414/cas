@@ -1,7 +1,0 @@
-*.local
-*.rendered.yaml
-*.secret.yaml
-**/tls/
-**/*.env
-!**/*.env.example
-.runtime/
