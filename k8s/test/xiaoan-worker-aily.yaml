@@ -45,5 +45,5 @@ spec:
         - name: xiaoan-storage
           nfs:
             server: 192.168.212.165
-            path: /db/k8s-ai-nfs/xiaoan-platform-data-env-test
+            path: /db/k8s-ai-nfs/xiaoan-platform-data-test
             readOnly: false

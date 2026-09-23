@@ -35,8 +35,8 @@ K8s 清单按环境分目录,生产在 `eboat-ai-ns`、测试在 `test-ai-ns` �
 | `k8s/test/` | 同上结构,资源名全部 `-test` 后缀 | 测试环境:独立 MySQL/Redis、NFS 目录、Ingress(ai-test.hengan.com) |
 | 根目录 | `backend-go/Dockerfile` | 多阶段构建,产物含 api/stream/worker/scheduler/migrate + 迁移文件 |
 | | `frontend/Dockerfile` | 仅公司 Nginx 镜像 + dist + nginx.generated.conf(编译在 Jenkins) |
-| | `Jenkinsfile.backend` | 后端流水线:构建 xiaoan-backend 镜像 → 按 DEPLOY_ENV 更新对应环境的 5 个后端 Deployment |
-| | `Jenkinsfile.frontend` | 前端流水线:Node 编译 → 仅构建 xiaoan-ui 镜像 → 按 DEPLOY_ENV 更新对应环境的 xiaoan-ui |
+| | `Jenkinsfile.backend` / `Jenkinsfile.backend-test` | 后端流水线:构建 xiaoan-backend 镜像 → 更新对应环境的 5 个后端 Deployment(prod/test 各一份,环境写死) |
+| | `Jenkinsfile.frontend` / `Jenkinsfile.frontend-test` | 前端流水线:Node 编译 → 仅构建 xiaoan-ui 镜像 → 更新对应环境的 xiaoan-ui(prod/test 各一份) |
 | | `Jenkinsfile.full` | 合并版备用:两个镜像一起构建发布(日常不用,一键全量重发时用;仅 prod) |
 
 两环境差异速查:
@@ -48,13 +48,13 @@ K8s 清单按环境分目录,生产在 `eboat-ai-ns`、测试在 `test-ai-ns` �
 | ConfigMap/Secret | `xiaoan-config` / `xiaoan-secret` | `xiaoan-config-test` / `xiaoan-secret-test` |
 | MySQL | 192.168.212.165:23306/xiaoan(xiaoanuser) | 192.168.211.26:20336/xiaoan(test_user) |
 | Redis | 集群 192.168.212.165:6381-6383(prefix xiaoan-platform) | standalone 192.168.211.26:6381 DB2(prefix xiaoan3) |
-| NFS | /db/k8s-ai-nfs/xiaoan-platform-data-test | /db/k8s-ai-nfs/xiaoan-platform-data-env-test |
+| NFS | /db/k8s-ai-nfs/xiaoan-platform-data | /db/k8s-ai-nfs/xiaoan-platform-data-test |
 | Ingress | ai.hengan.com | ai-test.hengan.com(域名需先在 DNS/网关配置) |
 | APP_ENV | production(cookie Secure) | test |
 | Nginx upstream | xiaoan-api:8080 / xiaoan-stream:8081 | xiaoan-api-test:8080 / xiaoan-stream-test:8081 |
 | 镜像 tag 前缀 | `prod-YYYYMMDDHHMMSS-<sha>` | `test-YYYYMMDDHHMMSS-<sha>` |
 
-关键设计约束(与参考文档一致):只用 2 个业务镜像;NFS 直挂不建 PV/PVC;MySQL/Redis 不进 K8s;**migration 一律人工执行**;tag 用 `<env>-YYYYMMDDHHMMSS-<sha>`(流水线 DEPLOY_ENV 参数决定前缀)。
+关键设计约束(与参考文档一致):只用 2 个业务镜像;NFS 直挂不建 PV/PVC;MySQL/Redis 不进 K8s;**migration 一律人工执行**;tag 用 `<env>-YYYYMMDDHHMMSS-<sha>`(前缀写在各环境流水线文件里:prod-/test-)。
 
 ---
 
@@ -78,10 +78,10 @@ showmount -e 192.168.212.165        # 应列出 /db/k8s-ai-nfs
 
 # 4. NFS 目录已建且容器可写(UID 10001)
 # 在 NFS server 上(两个环境的附件目录分开):
+mkdir -p /db/k8s-ai-nfs/xiaoan-platform-data
+chown 10001:10001 /db/k8s-ai-nfs/xiaoan-platform-data
 mkdir -p /db/k8s-ai-nfs/xiaoan-platform-data-test
 chown 10001:10001 /db/k8s-ai-nfs/xiaoan-platform-data-test
-mkdir -p /db/k8s-ai-nfs/xiaoan-platform-data-env-test
-chown 10001:10001 /db/k8s-ai-nfs/xiaoan-platform-data-env-test
 # 不要 chmod 777;若 NFS 使用 root_squash 需改为 no_root_squash 或相应 anonuid/anongid=10001
 
 # 5. 外部 MySQL 5.7 / Redis 连通性(node 上验证)
@@ -150,7 +150,7 @@ cd backend-go && go build -o migrate.exe ./cmd/migrate
 
 首次部署时镜像还不存在(还没跑过 Jenkins)。推荐顺序(**migration 需要镜像先存在**,故顺序是:先出镜像 → 再 migration → 再起应用):
 
-1. **Jenkins 首跑**:勾选 `SKIP_DEPLOY`(只构建 + 推送镜像,不碰 K8s),`DEPLOY_ENV` 选对应环境。完成后从控制台日志复制 `IMAGE_TAG=` 的值。
+1. **Jenkins 首跑**:在对应环境的流水线任务上勾选 `SKIP_DEPLOY`(只构建 + 推送镜像,不碰 K8s)。完成后从控制台日志复制 `IMAGE_TAG=` 的值。
 2. **人工执行 migration**(第四节):把对应环境 `migrate-job.yaml` 的占位 tag 换成第 1 步的 tag,apply 并确认日志出现 `migrations applied`。
 3. **apply 全部 Workload**:`kubectl apply -f k8s/prod/...` 或 `k8s/test/...`(命令如下)。YAML 里的 `REPLACE_WITH_IMAGE_TAG` 占位值此时可以不改——第 4 步 set image 会覆盖它;也可直接替换成真实 tag,两种都行。
 4. **Jenkins 第二跑**:不勾 `SKIP_DEPLOY`,正常全流程(set image + rollout 检查)。rollout 通过即部署完成。
@@ -179,15 +179,24 @@ kubectl apply -f k8s/test/ingress-higress.yaml
 
 ## 六、Jenkins 日常发布
 
-流水线已拆为前后端两条(`Jenkinsfile.backend` / `Jenkinsfile.frontend`),另有合并版 `Jenkinsfile.full` 备用(仅 prod,一键全量重发)。**每条流水线带 `DEPLOY_ENV` 参数(prod/test)**,决定发布到哪套 K8s 资源;镜像 tag 前缀也随环境(prod-/test-),回滚各查各的 tag。
+流水线按 **环境写死**:每种流水线有 prod/test 两份文件,环境由 Jenkins 任务的 Script Path 决定,**没有环境参数可选**——prod 任务永远发 prod,test 任务永远发 test,不存在误选。
 
-1. Jenkins 分别新建 **两个 Pipeline 任务**(如 `xiaoan-backend` 和 `xiaoan-ui`),源都指向 GitLab `http://192.168.0.81/ai_sys/xiaoan-platform.git`,branch `test`,Script Path 分别填 `Jenkinsfile.backend` / `Jenkinsfile.frontend`
-2. 调整两份 Jenkinsfile 里 `GIT_CREDENTIAL_ID`(Jenkins 凭据 ID),以及公司实际的 Harbor 登录方式
-3. **首跑**任一流水线勾选 `SKIP_DEPLOY`(只出镜像,为 migration 准备);日常发布不勾,选好 `DEPLOY_ENV` 后 Build Now
+| 任务名(建议) | Script Path | 环境 |
+|---|---|---|
+| `xiaoan-backend` | `Jenkinsfile.backend` | prod(eboat-ai-ns) |
+| `xiaoan-backend-test` | `Jenkinsfile.backend-test` | test(test-ai-ns) |
+| `xiaoan-ui` | `Jenkinsfile.frontend` | prod(eboat-ai-ns) |
+| `xiaoan-ui-test` | `Jenkinsfile.frontend-test` | test(test-ai-ns) |
 
-**后端流水线**:docker build xiaoan-backend → push → 按 DEPLOY_ENV 更新 5 个后端 Deployment(prod 无后缀 / test 带 `-test`)→ 逐个 rollout status(不跑前端 Node 编译,发布明显更快)。
+另有合并版 `Jenkinsfile.full` 备用(仅 prod,一键全量重发)。镜像 tag 前缀写在各文件里(prod-/test-),回滚各查各的 tag。
 
-**前端流水线**:nodedkbuild(node22140)npm ci → `APP_BASE_PATH=/xiaoan-platform/ NGINX_API_UPSTREAM=<环境对应upstream> NGINX_STREAM_UPSTREAM=<环境对应upstream> npm run build` → docker build xiaoan-ui → push → 更新对应环境的 xiaoan-ui → rollout status。⚠️ **Nginx upstream 烧在镜像里**,prod 与 test 的 xiaoan-ui 镜像不可混用(流水线已按 DEPLOY_ENV 自动选择)。
+1. Jenkins 按 上表 新建 **4 个 Pipeline 任务**,源都指向 GitLab `http://192.168.0.81/ai_sys/xiaoan-platform.git`,branch `test`
+2. 调整各 Jenkinsfile 里 `GIT_CREDENTIAL_ID`(Jenkins 凭据 ID),以及公司实际的 Harbor 登录方式
+3. **首跑**勾选 `SKIP_DEPLOY`(只出镜像,为 migration 准备);日常发布不勾,直接 Build Now
+
+**后端流水线**:docker build xiaoan-backend → push → 更新本环境的 5 个后端 Deployment(prod 无后缀 / test 带 `-test`)→ 逐个 rollout status(不跑前端 Node 编译,发布明显更快)。
+
+**前端流水线**:nodedkbuild(node22140)npm ci → `APP_BASE_PATH=/xiaoan-platform/ NGINX_API_UPSTREAM=<该环境的upstream> NGINX_STREAM_UPSTREAM=<该环境的upstream> npm run build` → docker build xiaoan-ui → push → 更新本环境的 xiaoan-ui → rollout status。⚠️ **Nginx upstream 烧在镜像里**,prod 与 test 的 xiaoan-ui 镜像不可混用(两份流水线文件已分别写死)。
 
 **发布顺序约定**:当前后端有 breaking 改动时(API 字段/协议变更),**先发后端**(保持向后兼容),再发前端;平时改哪端发哪条流水线即可。上生产前建议先发 test 环境验证。
 
@@ -215,7 +224,7 @@ kubectl get ingress -A | grep xiaoan   # ai.hengan.com(prod) 与 ai-test.hengan.
 
 ## 八、回滚
 
-前后端流水线 tag 各自独立,回滚时在对应环境(`DEPLOY_ENV`)的 Jenkins 构建历史(或 Harbor tag 前缀 prod-/test-)查各自的 `<旧tag>`:
+前后端流水线 tag 各自独立,回滚时在对应环境的 Jenkins 任务(或 Harbor tag 前缀 prod-/test-)查各自的 `<旧tag>`:
 
 ```bash
 # 后端回滚(测试环境资源名加 -test 后缀):查 xiaoan-backend 任务的历史 tag,

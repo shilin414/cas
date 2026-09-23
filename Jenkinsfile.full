@@ -3,7 +3,7 @@
 // pipelines instead (Jenkinsfile.backend, Jenkinsfile.frontend) so the two ends
 // can be released and rolled back independently.
 // PROD-ONLY: targets eboat-ai-ns with prod tags (prod-YYYYMMDDHHMMSS-<sha>);
-// use the split pipelines with DEPLOY_ENV=test for the test environment.
+// use the *-test pipeline files for the test environment.
 //
 // Flow: GitLab(test branch) → Node 22 frontend build → 2 docker images →
 // Harbor(eboat2) → set image on 6 Deployments → rollout check.

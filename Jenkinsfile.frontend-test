@@ -1,17 +1,16 @@
-// xiaoan-platform FRONTEND pipeline — PROD environment, hard-wired.
-// One pipeline file per environment (Jenkinsfile.frontend-test for test);
+// xiaoan-platform FRONTEND pipeline — TEST environment, hard-wired.
+// One pipeline file per environment (Jenkinsfile.frontend for prod);
 // the Jenkins job picks its environment by its Script Path, no parameters
-// to choose from — a prod job can never be misconfigured to test and
-// vice versa.
+// to choose from.
 //
 // Flow: GitLab(test branch) → Node 22 build (nodedkbuild node22140) →
-// docker build xiaoan-ui → Harbor(eboat2) → set image on xiaoan-ui
-// (eboat-ai-ns) → rollout check.
+// docker build xiaoan-ui → Harbor(eboat2) → set image on xiaoan-ui-test
+// (test-ai-ns) → rollout check.
 //
-// PROD values baked in: namespace eboat-ai-ns, Deployment xiaoan-ui,
-// Nginx upstreams xiaoan-api:8080 / xiaoan-stream:8081, tag prefix prod-.
-// → prod and test xiaoan-ui images are NOT interchangeable (upstreams
-// differ); rollback only ever to a prod- tag.
+// TEST values baked in: namespace test-ai-ns, Deployment xiaoan-ui-test,
+// Nginx upstreams xiaoan-api-test:8080 / xiaoan-stream-test:8081,
+// tag prefix test-. Test and prod xiaoan-ui images are NOT interchangeable
+// (upstreams differ); rollback only ever to a test- tag.
 //
 // NEVER touches backend Deployments or the database.
 //
@@ -20,15 +19,11 @@
 // frontend/public/ocr-assets/ppocrv6-tiny-20260921/ makes it fully offline.
 // If the Jenkins host has no internet, copy that directory from any machine
 // that built successfully once — the build fails closed without it.
-//
-// Release order when a change spans both ends: backend first (stays backward
-// compatible), then frontend.
 
 pipeline {
     agent any
 
     // SKIP_DEPLOY=true: build & push image only, do not touch K8s.
-    // Used on FIRST run (workloads not applied yet) and for image-only rebuilds.
     parameters {
         booleanParam(name: 'SKIP_DEPLOY', defaultValue: false, description: '只构建并推送镜像，不更新 K8s')
     }
@@ -36,11 +31,11 @@ pipeline {
     environment {
         HARBOR          = 'harbor.hengan.com:8086'
         HARBOR_PROJECT  = 'eboat2'
-        NAMESPACE       = 'eboat-ai-ns'
-        DEPLOYMENT      = 'xiaoan-ui'
-        API_UPSTREAM    = 'xiaoan-api:8080'
-        STREAM_UPSTREAM = 'xiaoan-stream:8081'
-        TAG_PREFIX      = 'prod'
+        NAMESPACE       = 'test-ai-ns'
+        DEPLOYMENT      = 'xiaoan-ui-test'
+        API_UPSTREAM    = 'xiaoan-api-test:8080'
+        STREAM_UPSTREAM = 'xiaoan-stream-test:8081'
+        TAG_PREFIX      = 'test'
         GIT_CREDENTIAL_ID = 'xiaoan-gitlab-http'
     }
 
@@ -62,8 +57,6 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    // Tag is independent of the backend pipeline's tag; rollback
-                    // looks up prod- xiaoan-ui tags only.
                     env.IMAGE_TAG = "${TAG_PREFIX}-${new Date().format('yyyyMMddHHmmss')}-${env.GIT_SHORT_SHA}"
                 }
                 echo "IMAGE_TAG=${env.IMAGE_TAG}"
@@ -80,7 +73,7 @@ pipeline {
                       "node22140" \
                       "npm ci"
 
-                    # Build with prod K8s upstream service names baked into
+                    # Build with TEST K8s upstream service names baked into
                     # nginx.generated.conf.
                     nodedkbuild "$WORKSPACE/frontend" \
                       "node22140" \
