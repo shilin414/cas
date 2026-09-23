@@ -6,7 +6,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: xiaoan-worker-aily-test
-  namespace: eboat-ai-ns
+  namespace: test-ai-ns
   labels:
     app: xiaoan-worker-aily-test
     app.kubernetes.io/part-of: xiaoan-platform

@@ -8,7 +8,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: xiaoan-ui-higress-test
-  namespace: eboat-ai-ns
+  namespace: test-ai-ns
   labels:
     app.kubernetes.io/part-of: xiaoan-platform
     app.kubernetes.io/environment: test

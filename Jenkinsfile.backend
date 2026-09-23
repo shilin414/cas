@@ -5,8 +5,8 @@
 // Flow: GitLab(test branch) → docker build xiaoan-backend → Harbor(eboat2) →
 // set image on backend Deployments → rollout check.
 //
-// DEPLOY_ENV selects the K8s Deployment set (k8s/prod/ vs k8s/test/ manifests,
-// same namespace, -test-suffixed resource names for the test environment).
+// DEPLOY_ENV selects the K8s target: prod → eboat-ai-ns (xiaoan-* Deployments)
+// or test → test-ai-ns (xiaoan-*-test Deployments, k8s/test/ manifests).
 // Tag prefix follows the environment so Harbor tags are distinguishable.
 //
 // NEVER runs database migrations (manual ops step, k8s/README.md §四) and never
@@ -29,7 +29,8 @@ pipeline {
     environment {
         HARBOR          = 'harbor.hengan.com:8086'
         HARBOR_PROJECT  = 'eboat2'
-        NAMESPACE       = 'eboat-ai-ns'
+        // prod resources live in eboat-ai-ns; test resources in test-ai-ns.
+        NAMESPACE       = "${params.DEPLOY_ENV == 'test' ? 'test-ai-ns' : 'eboat-ai-ns'}"
         GIT_CREDENTIAL_ID = 'xiaoan-gitlab-http'
     }
 

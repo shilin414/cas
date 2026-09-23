@@ -2,6 +2,8 @@
 // 6 Deployments. Kept as the one-shot option; day-to-day releases use the split
 // pipelines instead (Jenkinsfile.backend, Jenkinsfile.frontend) so the two ends
 // can be released and rolled back independently.
+// PROD-ONLY: targets eboat-ai-ns with prod tags (prod-YYYYMMDDHHMMSS-<sha>);
+// use the split pipelines with DEPLOY_ENV=test for the test environment.
 //
 // Flow: GitLab(test branch) → Node 22 frontend build → 2 docker images →
 // Harbor(eboat2) → set image on 6 Deployments → rollout check.
@@ -49,7 +51,7 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    env.IMAGE_TAG = "test-${new Date().format('yyyyMMddHHmmss')}-${env.GIT_SHORT_SHA}"
+                    env.IMAGE_TAG = "prod-${new Date().format('yyyyMMddHHmmss')}-${env.GIT_SHORT_SHA}"
                 }
                 echo "IMAGE_TAG=${env.IMAGE_TAG}"
             }

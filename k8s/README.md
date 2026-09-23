@@ -18,7 +18,7 @@ MySQL / Redis 均为外部服务;附件走 NFS 直挂(无 PV/PVC)。
 
 ## 文件清单
 
-K8s 清单按环境分目录,同一 namespace `eboat-ai-ns` 内并行运行两套(测试环境资源名全部带 `-test` 后缀):
+K8s 清单按环境分目录,生产在 `eboat-ai-ns`、测试在 `test-ai-ns` 两个 namespace 并行运行(测试环境资源名全部带 `-test` 后缀):
 
 | 目录 | 文件 | 用途 |
 |---|---|---|
@@ -43,6 +43,7 @@ K8s 清单按环境分目录,同一 namespace `eboat-ai-ns` 内并行运行两�
 
 | 项 | 生产 (prod) | 测试 (test) |
 |---|---|---|
+| **Namespace** | `eboat-ai-ns` | `test-ai-ns` |
 | 资源名 | `xiaoan-api` 等 | `xiaoan-api-test` 等 |
 | ConfigMap/Secret | `xiaoan-config` / `xiaoan-secret` | `xiaoan-config-test` / `xiaoan-secret-test` |
 | MySQL | 192.168.212.165:23306/xiaoan(xiaoanuser) | 192.168.211.26:20336/xiaoan(test_user) |
@@ -51,6 +52,7 @@ K8s 清单按环境分目录,同一 namespace `eboat-ai-ns` 内并行运行两�
 | Ingress | ai.hengan.com | ai-test.hengan.com(域名需先在 DNS/网关配置) |
 | APP_ENV | production(cookie Secure) | test |
 | Nginx upstream | xiaoan-api:8080 / xiaoan-stream:8081 | xiaoan-api-test:8080 / xiaoan-stream-test:8081 |
+| 镜像 tag 前缀 | `prod-YYYYMMDDHHMMSS-<sha>` | `test-YYYYMMDDHHMMSS-<sha>` |
 
 关键设计约束(与参考文档一致):只用 2 个业务镜像;NFS 直挂不建 PV/PVC;MySQL/Redis 不进 K8s;**migration 一律人工执行**;tag 用 `<env>-YYYYMMDDHHMMSS-<sha>`(流水线 DEPLOY_ENV 参数决定前缀)。
 
@@ -60,13 +62,16 @@ K8s 清单按环境分目录,同一 namespace `eboat-ai-ns` 内并行运行两�
 
 ```bash
 # 1. Namespace(不存在则建)
-kubectl get ns eboat-ai-ns || kubectl create ns eboat-ai-ns
+kubectl get ns eboat-ai-ns  || kubectl create ns eboat-ai-ns   # 生产
+kubectl get ns test-ai-ns  || kubectl create ns test-ai-ns   # 测试
 
-# 2. Harbor 拉取凭据(不存在则建;需 Harbor 项目 eboat2 的机器人账号)
-kubectl -n eboat-ai-ns get secret harbor-secret || \
-kubectl -n eboat-ai-ns create secret docker-registry harbor-secret \
-  --docker-server=harbor.hengan.com:8086 \
-  --docker-username=<HARBOR_USER> --docker-password=<HARBOR_PASSWORD>
+# 2. Harbor 拉取凭据(不存在则建;需 Harbor 项目 eboat2 的机器人账号;两个 namespace 各建一份)
+for ns in eboat-ai-ns test-ai-ns; do
+  kubectl -n $ns get secret harbor-secret || \
+  kubectl -n $ns create secret docker-registry harbor-secret \
+    --docker-server=harbor.hengan.com:8086 \
+    --docker-username=<HARBOR_USER> --docker-password=<HARBOR_PASSWORD>
+done
 
 # 3. K8s 节点能访问 NFS(Jenkins 或任一 node 上)
 showmount -e 192.168.212.165        # 应列出 /db/k8s-ai-nfs
@@ -123,10 +128,10 @@ kubectl apply -f k8s/prod/migrate-job.yaml
 kubectl -n eboat-ai-ns logs job/xiaoan-migrate -f      # 期望看到 "migrations applied"
 # 测试环境:
 kubectl apply -f k8s/test/migrate-job.yaml
-kubectl -n eboat-ai-ns logs job/xiaoan-migrate-test -f
+kubectl -n test-ai-ns logs job/xiaoan-migrate-test -f
 # 3. 清理(便于下次重跑)
 kubectl -n eboat-ai-ns delete job xiaoan-migrate
-kubectl -n eboat-ai-ns delete job xiaoan-migrate-test
+kubectl -n test-ai-ns delete job xiaoan-migrate-test
 ```
 
 Job 说明:`backoffLimit: 0`——迁移失败**不会**自动重试;命令是独立的 `migrate` 二进制(不是 `scheduler --migrate`,不是 `api -migrate`),从对应环境的 secret 读 DB 连接信息,迁移文件在镜像 `/app/db/migrations`。
@@ -191,8 +196,9 @@ kubectl apply -f k8s/test/ingress-higress.yaml
 ## 七、验证清单
 
 ```bash
-kubectl -n eboat-ai-ns get pods    # 每环境 8 pods 全部 Running(api2/stream2/worker1/worker1/scheduler1/ui2)
-kubectl -n eboat-ai-ns get ingress    # 两条:ai.hengan.com 与 ai-test.hengan.com
+kubectl -n eboat-ai-ns get pods    # 生产 8 pods 全部 Running
+kubectl -n test-ai-ns get pods     # 测试 8 pods 全部 Running
+kubectl get ingress -A | grep xiaoan   # ai.hengan.com(prod) 与 ai-test.hengan.com(test)
 ```
 
 生产:
@@ -205,7 +211,7 @@ kubectl -n eboat-ai-ns get ingress    # 两条:ai.hengan.com 与 ai-test.hengan.
 - [ ] WebSocket:页面控制台无 WS 断连报错
 - [ ] `kubectl -n eboat-ai-ns logs deploy/xiaoan-api --tail` 无 DB/Redis 连接错误
 
-测试:同上,把资源名换成 `-test` 后缀、URL 换成 `http(s)://ai-test.hengan.com/xiaoan-platform/`、scheduler 查 `-l app=xiaoan-scheduler-test`。
+测试:同上,把 namespace 换成 `test-ai-ns`、资源名换成 `-test` 后缀、URL 换成 `http(s)://ai-test.hengan.com/xiaoan-platform/`、scheduler 查 `-l app=xiaoan-scheduler-test`。
 
 ## 八、回滚
 

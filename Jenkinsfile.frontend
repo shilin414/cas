@@ -5,8 +5,9 @@
 // Flow: GitLab(test branch) → Node 22 build (nodedkbuild node22140) →
 // docker build xiaoan-ui → Harbor(eboat2) → set image on xiaoan-ui → rollout check.
 //
-// DEPLOY_ENV selects the K8s Deployment (k8s/prod/ vs k8s/test/ manifests, same
-// namespace, -test-suffixed names) AND the Nginx upstreams baked into the image:
+// DEPLOY_ENV selects the K8s target: prod → eboat-ai-ns (xiaoan-ui) or
+// test → test-ai-ns (xiaoan-ui-test), AND the Nginx upstreams baked into the
+// image:
 //   prod: xiaoan-api:8080 / xiaoan-stream:8081
 //   test: xiaoan-api-test:8080 / xiaoan-stream-test:8081
 // → one image per environment is required; tags are prefixed by environment.
@@ -34,7 +35,8 @@ pipeline {
     environment {
         HARBOR          = 'harbor.hengan.com:8086'
         HARBOR_PROJECT  = 'eboat2'
-        NAMESPACE       = 'eboat-ai-ns'
+        // prod resources live in eboat-ai-ns; test resources in test-ai-ns.
+        NAMESPACE       = "${params.DEPLOY_ENV == 'test' ? 'test-ai-ns' : 'eboat-ai-ns'}"
         APP_BASE_PATH   = '/xiaoan-platform/'
         GIT_CREDENTIAL_ID = 'xiaoan-gitlab-http'
     }

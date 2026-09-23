@@ -7,7 +7,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: xiaoan-config-test
-  namespace: eboat-ai-ns
+  namespace: test-ai-ns
   labels:
     app.kubernetes.io/part-of: xiaoan-platform
     app.kubernetes.io/environment: test
