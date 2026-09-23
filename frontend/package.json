@@ -15,8 +15,7 @@
     "check:tokens": "node scripts/check-css-tokens.mjs",
     "ocr:runtime": "node scripts/prepare-ocr-runtime.mjs",
     "ocr:prepare": "node scripts/prepare-ocr-resources.mjs",
-    "predev": "npm run ocr:runtime",
-    "prebuild": "npm run ocr:runtime && npm run ocr:prepare",
+    "ocr:enable": "npm run ocr:runtime && npm run ocr:prepare",
     "test:ocr-deployment": "node --test scripts/ocr-deployment.test.mjs"
   },
   "dependencies": {

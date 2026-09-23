@@ -3,10 +3,15 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const read = (relative) => readFile(new URL(relative, import.meta.url), 'utf8');
-test('standard build prepares pinned runtime AND models, dev remains model-download-free', async () => {
+test('OCR is opt-in while temporarily disabled: no pre-hooks, ocr:enable restores them', async () => {
   const pkg=JSON.parse(await read('../package.json'));
-  assert.equal(pkg.scripts.prebuild, 'npm run ocr:runtime && npm run ocr:prepare');
-  assert.equal(pkg.scripts.predev, 'npm run ocr:runtime');
+  // Temporarily disabled for deployment (2026-09): plain build/dev must stay fully
+  // offline and not require OCR runtime/model assets. `npm run ocr:enable` is the
+  // explicit re-enable step that prepares assets; when OCR is re-enabled these two
+  // assertions flip back to equality (predev=ocr:runtime, prebuild=ocr:runtime+prepare).
+  assert.equal(pkg.scripts.predev, undefined);
+  assert.equal(pkg.scripts.prebuild, undefined);
+  assert.equal(pkg.scripts['ocr:enable'], 'npm run ocr:runtime && npm run ocr:prepare');
 });
 test('ORT support module is published/imported as .js and protocol agrees', async () => {
   const prepare=await read('./prepare-ocr-runtime.mjs');
