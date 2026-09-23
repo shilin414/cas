@@ -74,14 +74,23 @@ for ns in eboat-ai-ns test-ai-ns; do
 done
 
 # 3. K8s 节点能访问 NFS(Jenkins 或任一 node 上)
-showmount -e 192.168.212.165        # 应列出 /db/k8s-ai-nfs
+showmount -e 192.168.212.165
+# 注意:本 NFS server 是按子目录逐个导出的——每个附件目录都必须出现在
+# showmount 输出里,否则 pod 挂载报 "No such file or directory"(即使目录真实存在)。
 
-# 4. NFS 目录已建且容器可写(UID 10001)
-# 在 NFS server 上(两个环境的附件目录分开):
+# 4. NFS 目录已建、已导出、容器可写(UID 10001)
+# 在 NFS server(192.168.212.165)上,两个环境的附件目录分开,每步都不能少:
+#   ① 建目录并授权
 mkdir -p /db/k8s-ai-nfs/xiaoan-platform-data
 chown 10001:10001 /db/k8s-ai-nfs/xiaoan-platform-data
 mkdir -p /db/k8s-ai-nfs/xiaoan-platform-data-test
 chown 10001:10001 /db/k8s-ai-nfs/xiaoan-platform-data-test
+#   ② 追加导出(/etc/exports 按子目录逐个导出;选项照抄兄弟目录的写法)
+echo '/db/k8s-ai-nfs/xiaoan-platform-data *(rw,no_root_squash)' >> /etc/exports
+echo '/db/k8s-ai-nfs/xiaoan-platform-data-test *(rw,no_root_squash)' >> /etc/exports
+#   ③ 重载导出并验证(立即生效,无需重启 nfs 服务)
+exportfs -ra
+showmount -e localhost     # 两个目录必须都出现在列表里
 # 不要 chmod 777;若 NFS 使用 root_squash 需改为 no_root_squash 或相应 anonuid/anongid=10001
 
 # 5. 外部 MySQL 5.7 / Redis 连通性(node 上验证)
@@ -89,7 +98,9 @@ mysql -h <DB_HOST> -u <DB_USER> -p -e "SELECT 1"
 redis-cli -h <REDIS_HOST> -a <REDIS_PASSWORD> ping
 ```
 
-**NFS 权限验证方法**:部署后如果 pod 起不来,events 出现 `Permission denied` 或 `access denied by server`,几乎都是 NFS 导出权限/UID 不匹配问题。
+**NFS 排错速查**:pod 卡 `ContainerCreating`,events 出现——
+- `reason given by server: No such file or directory` → 目录**没在 /etc/exports 里导出**(目录存在也会报这个错);按前置条件第 4 步 ②③ 补导出。
+- `Permission denied` / `access denied by server` → 导出权限/UID 不匹配(root_squash 与容器 UID 10001 冲突)。
 
 ## 二、Secret / ConfigMap 准备(一次性)
 
