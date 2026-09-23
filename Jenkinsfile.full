@@ -67,12 +67,19 @@ pipeline {
                       "node22140" \
                       "npm ci"
 
+                    # nodedkbuild's command argument is executed as a single
+                    # command name (no shell word-splitting) — env vars must be
+                    # exported here so the npm child process inherits them.
+                    export APP_BASE_PATH=/xiaoan-platform/
+                    export NGINX_API_UPSTREAM=xiaoan-api:8080
+                    export NGINX_STREAM_UPSTREAM=xiaoan-stream:8081
+
                     # Build with K8s upstream service names baked into nginx.generated.conf.
                     # prebuild hook downloads OCR models (6.1 MB, sha256-pinned); after the
                     # first successful build the cache makes this step fully offline.
                     nodedkbuild "$WORKSPACE/frontend" \
                       "node22140" \
-                      "APP_BASE_PATH=/xiaoan-platform/ NGINX_API_UPSTREAM=xiaoan-api:8080 NGINX_STREAM_UPSTREAM=xiaoan-stream:8081 npm run build"
+                      "npm run build"
 
                     if [ ! -d "$WORKSPACE/frontend/dist" ]; then
                         echo "前端编译失败"

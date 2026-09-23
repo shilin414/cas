@@ -33,8 +33,6 @@ pipeline {
         HARBOR_PROJECT  = 'eboat2'
         NAMESPACE       = 'test-ai-ns'
         DEPLOYMENT      = 'xiaoan-ui-test'
-        API_UPSTREAM    = 'xiaoan-api-test:8080'
-        STREAM_UPSTREAM = 'xiaoan-stream-test:8081'
         TAG_PREFIX      = 'test'
         GIT_CREDENTIAL_ID = 'xiaoan-gitlab-http'
     }
@@ -73,11 +71,18 @@ pipeline {
                       "node22140" \
                       "npm ci"
 
+                    # nodedkbuild's command argument is executed as a single
+                    # command name (no shell word-splitting) — env vars must be
+                    # exported here so the npm child process inherits them.
+                    export APP_BASE_PATH=/xiaoan-platform/
+                    export NGINX_API_UPSTREAM=xiaoan-api-test:8080
+                    export NGINX_STREAM_UPSTREAM=xiaoan-stream-test:8081
+
                     # Build with TEST K8s upstream service names baked into
                     # nginx.generated.conf.
                     nodedkbuild "$WORKSPACE/frontend" \
                       "node22140" \
-                      "APP_BASE_PATH=/xiaoan-platform/ NGINX_API_UPSTREAM=${API_UPSTREAM} NGINX_STREAM_UPSTREAM=${STREAM_UPSTREAM} npm run build"
+                      "npm run build"
 
                     if [ ! -d "$WORKSPACE/frontend/dist" ]; then
                         echo "前端编译失败"
