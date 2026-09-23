@@ -1,6 +1,6 @@
 # xiaoan-platform 部署手册(K8s + Jenkins + Harbor + Higress)
 
-对应参考文档《小安工作助手 CAS 部署改造执行指南》的落地实现。本文档是**执行步骤**,按顺序走完即完成首次部署;之后日常发布只需在 Jenkins 点 Build Now。
+本文档是**执行步骤**,按顺序走完即完成首次部署;之后日常发布只需在 Jenkins 点 Build Now。
 
 架构总览:
 
@@ -106,15 +106,6 @@ kubectl -n eboat-ai-ns delete job xiaoan-migrate
 
 Job 说明:`backoffLimit: 0`——迁移失败**不会**自动重试;命令是独立的 `migrate` 二进制(不是 `scheduler --migrate`,不是 `api -migrate`),从 `xiaoan-secret` 读 DB 连接信息,迁移文件在镜像 `/app/db/migrations`。
 
-**若数据库此前已跑过旧版 0044 迁移**(seed 的内置 OCR 模型是启用状态,而当前版本 OCR 已下线),迁移后补一条 SQL 将其停用:
-
-```sql
-UPDATE ai_models SET enabled = FALSE
-WHERE model_id = 'PP-OCRv6_tiny' AND execution_location = 'browser_local';
-```
-
-全新数据库不受影响(0044 已改为以停用状态 seed)。
-
 等价做法(本地直连数据库):
 
 ```bash
@@ -154,7 +145,7 @@ kubectl apply -f k8s/ingress-higress.yaml
 
 Jenkins 会:nodedkbuild(node22140)npm ci → `APP_BASE_PATH=/xiaoan-platform/ NGINX_API_UPSTREAM=xiaoan-api:8080 NGINX_STREAM_UPSTREAM=xiaoan-stream:8081 npm run build` → docker build 两个镜像(同 tag)→ push Harbor → 6 个 Deployment set image → 逐个 rollout status(失败即 FAIL,不会静默成功)。
 
-**OCR 已临时下线**(2026-09):构建不再联网下载模型、UI 镜像不含 OCR 资产。`npm run build` 全程离线可用。数据库 seed 的内置 OCR 模型为停用状态,UI 里"开始本地识别"按钮会提示组件下线。**恢复 OCR**:`npm run ocr:enable`(重新生成 runtime + 下载模型)→ 还原 `frontend/src/features/ai-models/OcrEntry.tsx` 中 `loadOcrPanel` 的动态 import(git 历史)→ 重新构建部署;详见 `frontend/scripts/ocr-deployment.test.mjs` 顶部注释与 `docs/ocr-browser-deployment.md`。
+**OCR 模型说明**:前端 build 的 prebuild 钩子从 bcebos.com 下载 6.1MB OCR 模型(sha256 固定)。首次构建需公网;之后 `frontend/public/ocr-assets/ppocrv6-tiny-20260921/` 有缓存则完全离线。若 Jenkins 无公网:把任意已成功构建过的机器上的该目录打包上传到 Jenkins workspace 同路径即可。构建 fail-closed,缺模型会直接报错而不是静默缺功能。
 
 ## 七、验证清单
 

@@ -4,15 +4,8 @@ import { ScanOutlined } from '@ant-design/icons';
 import type { AIModel } from '@/services/aiModels';
 import { errorText } from './modelLogic';
 
-// OCR is temporarily disabled for deployment (2026-09): the panel never loads and
-// the build needs no OCR runtime/model assets (fully offline, smaller image).
-// To re-enable:
-//   1. npm run ocr:enable   (restores the old predev/prebuild hook behavior)
-//   2. restore the dynamic import below:
-//        export const loadOcrPanel = () => import('./ocr/OcrTestPanel');
-type OcrPanelModule = typeof import('./ocr/OcrTestPanel'); // type-only: erased at build
-export const loadOcrPanel = (): Promise<OcrPanelModule> =>
-  Promise.reject(new Error('本地 OCR 组件已在当前版本临时下线'));
+// Do not move this import to module scope or a preloaded route. The click is the consent boundary.
+export const loadOcrPanel = () => import('./ocr/OcrTestPanel');
 class OcrBoundary extends React.Component<{ children: React.ReactNode }, { error: string }> {
   state = { error: '' };
   static getDerivedStateFromError(error: unknown) { return { error: errorText(error) }; }

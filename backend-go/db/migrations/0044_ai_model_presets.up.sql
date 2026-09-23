@@ -24,14 +24,12 @@ DELETE FROM ai_connections
 WHERE id=@glm_connection_id
   AND NOT EXISTS (SELECT 1 FROM ai_models WHERE connection_id=@glm_connection_id);
 
--- Browser OCR is temporarily disabled (2026-09, no runtime/model assets in the
--- build): seeded DISABLED so it stays out of the usable catalog until re-enabled.
 INSERT INTO ai_models(
  id,name,model_id,capability_kind,execution_location,connection_id,browser_manifest,capabilities,default_parameters,enabled,version,validation_status,created_at,updated_at
 )
 SELECT @ocr_model_id,'内置 OCR（PP-OCRv6 Tiny）','PP-OCRv6_tiny','ocr','browser_local',NULL,
        '{"adapter":"paddleocr_tiny","version":"ppocrv6-tiny-20260921","resources":[{"name":"PP-OCRv6_tiny_det","url":"ocr-assets/ppocrv6-tiny-20260921/PP-OCRv6_tiny_det.tar","sha256":"ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d","size_bytes":1792000},{"name":"PP-OCRv6_tiny_rec","url":"ocr-assets/ppocrv6-tiny-20260921/PP-OCRv6_tiny_rec.tar","sha256":"1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29","size_bytes":4526080}]}',
        '{"image":true,"video":false,"pdf":false,"streaming":false}','{}',
-       FALSE,1,'unverified',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)
+       TRUE,1,'unverified',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM ai_models WHERE model_id='PP-OCRv6_tiny' AND execution_location='browser_local');

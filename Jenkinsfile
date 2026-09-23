@@ -62,7 +62,8 @@ pipeline {
                       "npm ci"
 
                     # Build with K8s upstream service names baked into nginx.generated.conf.
-                    # OCR is temporarily disabled: no model downloads, build is fully offline.
+                    # prebuild hook downloads OCR models (6.1 MB, sha256-pinned); after the
+                    # first successful build the cache makes this step fully offline.
                     nodedkbuild "$WORKSPACE/frontend" \
                       "node22140" \
                       "APP_BASE_PATH=/xiaoan-platform/ NGINX_API_UPSTREAM=xiaoan-api:8080 NGINX_STREAM_UPSTREAM=xiaoan-stream:8081 npm run build"
