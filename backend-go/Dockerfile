@@ -2,7 +2,7 @@
 # Kubernetes selects the process via `command:`; build once per release tag.
 # Build context must be backend-go/ (docker build -f backend-go/Dockerfile backend-go).
 
-FROM golang:1.27.1-alpine AS builder
+FROM harbor.hengan.com:8086/lib/golang:1.27.1-alpine AS builder
 
 WORKDIR /build
 
@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api ./c
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/scheduler ./cmd/scheduler \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
 
-FROM alpine:3.22
+FROM harbor.hengan.com:8086/lib/alpine:3.22
 
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -g 10001 xiaoan \
