@@ -32,11 +32,12 @@ data:
   DB_QUERY_TIMEOUT: 15s
 
   # ── External Redis (password is Secret-only) ──
-  # Validate with ops whether prod is REDIS_MODE=cluster; standalone default kept here.
-  REDIS_MODE: standalone
+  # Prod topology per backend-go/.env.production.local: 3-node cluster on
+  # 192.168.212.165:6381-6383. Redis Cluster requires DB 0.
+  REDIS_MODE: cluster
   REDIS_DATABASE: "0"
-  REDIS_KEY_PREFIX: xiaoan3
-  REDIS_CLUSTER_NODES: ""
+  REDIS_KEY_PREFIX: xiaoan-platform
+  REDIS_CLUSTER_NODES: 192.168.212.165:6381,192.168.212.165:6382,192.168.212.165:6383
   REDIS_CLUSTER_MAX_REDIRECTS: "3"
   REDIS_CONNECT_TIMEOUT: 10s
   REDIS_TIMEOUT: 5s

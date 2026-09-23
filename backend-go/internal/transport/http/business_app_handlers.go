@@ -69,12 +69,21 @@ func (s *Server) businessAppAccess(w http.ResponseWriter, r *http.Request) (*cat
 	}
 	return app, caller
 }
+// callerFeishuUserID returns the OAuth-verified Feishu user_id (the employee
+// account number); empty for local-admin sessions without a Feishu identity.
+func callerFeishuUserID(caller *AuthenticatedUser) string {
+	if caller == nil || caller.Identity == nil {
+		return ""
+	}
+	return caller.Identity.FeishuUserID
+}
+
 func (s *Server) businessAppStatus(w http.ResponseWriter, r *http.Request) {
 	app, caller := s.businessAppAccess(w, r)
 	if app == nil {
 		return
 	}
-	writeJSON(w, 200, s.BusinessApps.Status(app.RendererKey, caller.ID))
+	writeJSON(w, 200, s.BusinessApps.Status(app.RendererKey, caller.ID, callerFeishuUserID(caller)))
 }
 func (s *Server) businessAppExecute(w http.ResponseWriter, r *http.Request) {
 	app, caller := s.businessAppAccess(w, r)
@@ -98,7 +107,7 @@ func (s *Server) businessAppExecute(w http.ResponseWriter, r *http.Request) {
 	}
 	mutation := !businessapps.IsQuery(app.RendererKey)
 	if mutation {
-		target, e := s.BusinessApps.Target(caller.ID, input.UserCode)
+		target, e := s.BusinessApps.Target(caller.ID, callerFeishuUserID(caller), input.UserCode)
 		if e != nil {
 			writeDetail(w, 403, e.Error())
 			return

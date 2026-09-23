@@ -134,12 +134,22 @@ func (s *Service) Configured(key string) bool {
 		return Known(key) && validURL(c.EboatURL) && c.BasicAuth != "" && c.Username != "" && c.Password != "" && c.Tenant != ""
 	}
 }
-func (s *Service) Status(key string, userID int64) Status {
-	id := strconv.FormatInt(userID, 10)
-	account := s.config.Accounts[id]
-	if !accountPattern.MatchString(account) {
-		account = ""
+
+// ownAccount resolves the caller's own employee account number. Feishu OAuth
+// writes feishu_user_id server-side (users cannot edit it), so it is the
+// default source; ACCOUNT_MAP entries override it for verified exceptions.
+func (s *Service) ownAccount(userID int64, feishuUserID string) string {
+	if account := s.config.Accounts[strconv.FormatInt(userID, 10)]; accountPattern.MatchString(account) {
+		return account
 	}
+	if accountPattern.MatchString(feishuUserID) {
+		return feishuUserID
+	}
+	return ""
+}
+func (s *Service) Status(key string, userID int64, feishuUserID string) Status {
+	id := strconv.FormatInt(userID, 10)
+	account := s.ownAccount(userID, feishuUserID)
 	v := Status{Configured: s.Configured(key), Account: account, CanManageOthers: s.config.Operators[id]}
 	v.CanSubmit = v.Configured && (IsQuery(key) || v.Account != "" || v.CanManageOthers)
 	if !v.Configured {
@@ -149,9 +159,9 @@ func (s *Service) Status(key string, userID int64) Status {
 	}
 	return v
 }
-func (s *Service) Target(userID int64, requested string) (string, error) {
+func (s *Service) Target(userID int64, feishuUserID, requested string) (string, error) {
 	id := strconv.FormatInt(userID, 10)
-	own := s.config.Accounts[id]
+	own := s.ownAccount(userID, feishuUserID)
 	if requested == "" {
 		requested = own
 	}

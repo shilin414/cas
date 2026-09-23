@@ -36,17 +36,41 @@ func TestValidation(t *testing.T) {
 }
 func TestTargetCannotBeSpoofed(t *testing.T) {
 	s := New(Config{Accounts: map[string]string{"7": "25180220"}, Operators: map[string]bool{"9": true}})
-	if _, e := s.Target(7, "other"); e == nil {
+	if _, e := s.Target(7, "", "other"); e == nil {
 		t.Fatal("cross-user accepted")
 	}
-	if v, e := s.Target(7, ""); e != nil || v != "25180220" {
+	if v, e := s.Target(7, "", ""); e != nil || v != "25180220" {
 		t.Fatal(v, e)
 	}
-	if _, e := s.Target(8, "25180220"); e == nil {
+	if _, e := s.Target(8, "", "25180220"); e == nil {
 		t.Fatal("unmapped accepted")
 	}
-	if v, e := s.Target(9, "25180221"); e != nil || v != "25180221" {
+	if v, e := s.Target(9, "", "25180221"); e != nil || v != "25180221" {
 		t.Fatal(v, e)
+	}
+}
+func TestFeishuUserIDResolvesOwnAccount(t *testing.T) {
+	s := New(Config{})
+	if v, e := s.Target(7, "19127920", ""); e != nil || v != "19127920" {
+		t.Fatal("feishu user_id not accepted as own account", v, e)
+	}
+	if _, e := s.Target(7, "19127920", "25180220"); e == nil {
+		t.Fatal("feishu-derived account may not target others")
+	}
+	if _, e := s.Target(7, "", ""); e == nil {
+		t.Fatal("no identity and no mapping must fail closed")
+	}
+	// ACCOUNT_MAP overrides feishu user_id for verified exceptions.
+	m := New(Config{Accounts: map[string]string{"7": "25180220"}})
+	if v, e := m.Target(7, "19127920", ""); e != nil || v != "25180220" {
+		t.Fatal("mapping should win", v, e)
+	}
+	if st := s.Status("oa-unlock", 7, "19127920"); st.Configured {
+		t.Fatal("empty config must not report configured")
+	}
+	c := New(Config{OAUnlockURL: "http://up.test/ulemysta", OAAppID: "app", OASecret: "secret"})
+	if st := c.Status("oa-unlock", 7, "19127920"); !st.CanSubmit || st.Account != "19127920" {
+		t.Fatal("status should allow feishu-derived account", st)
 	}
 }
 func TestTokenCacheAndWireFormat(t *testing.T) {
@@ -185,18 +209,18 @@ func TestEnvironmentStatusFailsClosed(t *testing.T) {
 	t.Setenv("BUSINESS_MATERIAL_URL", "https://example.test/material")
 	t.Setenv("BUSINESS_MATERIAL_AUTH", "AppCode test")
 	s := New(FromEnv())
-	if !s.Status("material-query", 7).CanSubmit {
+	if !s.Status("material-query", 7, "").CanSubmit {
 		t.Fatal("query not enabled")
 	}
-	if s.Status("oa-unlock", 7).CanSubmit {
+	if s.Status("oa-unlock", 7, "").CanSubmit {
 		t.Fatal("missing config accepted")
 	}
-	if !s.Status("oa-unlock", 9).CanManageOthers {
+	if !s.Status("oa-unlock", 9, "").CanManageOthers {
 		t.Fatal("operator")
 	}
 	t.Setenv("BUSINESS_ACCOUNT_MAP", `invalid`)
 	s = New(FromEnv())
-	if _, e := s.Target(7, "001"); e == nil {
+	if _, e := s.Target(7, "", "001"); e == nil {
 		t.Fatal("bad config open")
 	}
 }

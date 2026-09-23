@@ -35,7 +35,8 @@ BUSINESS_OPERATOR_IDS=
 ```
 
 EBOAT填源站，其他地址按上游契约填写完整接口URL；认证值保留正确Basic/AppCode前缀。缺配置时明确显示未配置，不能伪装空查询成功。
-ACCOUNT_MAP是平台users.id到人工核验工号的JSON映射，OPERATOR_IDS是允许代办的平台用户id列表。不得从浏览器展示名称推断工号权限；代办仍受应用ACL约束。
+账号变更类应用的本人工号默认自动取飞书OAuth登录写入的`feishu_identities.feishu_user_id`（服务端写入，用户不可自行修改；需在飞书开放平台开启`contact:user.employee_id:readonly`字段权限）。
+`ACCOUNT_MAP`从必需项降级为人工核验的例外覆盖（平台users.id到工号的JSON映射），一般留空`{}`；`OPERATOR_IDS`是允许代办的平台用户id列表。不得从浏览器展示名称或用户可编辑的`users.display_id`推断工号权限；代办仍受应用ACL约束。
 
 ## 调用与分享
 
