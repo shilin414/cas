@@ -32,7 +32,9 @@ MySQL / Redis 均为外部服务;附件走 NFS 直挂(无 PV/PVC)。
 | `k8s/ingress-higress.yaml` | Higress Ingress → xiaoan-ui-service:80 |
 | `backend-go/Dockerfile` | 多阶段构建,产物含 api/stream/worker/scheduler/migrate + 迁移文件 |
 | `frontend/Dockerfile` | 仅公司 Nginx 镜像 + dist + nginx.generated.conf(编译在 Jenkins) |
-| `Jenkinsfile` | 全流程:编译 → 双镜像 → Harbor → set image → rollout 检查 |
+| `Jenkinsfile.backend` | 后端流水线：仅构建 xiaoan-backend 镜像 → 更新 5 个后端 Deployment |
+| `Jenkinsfile.frontend` | 前端流水线：Node 编译 → 仅构建 xiaoan-ui 镜像 → 更新 xiaoan-ui |
+| `Jenkinsfile.full` | 合并版备用：两个镜像一起构建发布(日常不用,一键全量重发时用) |
 
 关键设计约束(与参考文档一致):只用 2 个业务镜像;NFS 直挂不建 PV/PVC;MySQL/Redis 不进 K8s;**migration 一律人工执行**;tag 用 `test-YYYYMMDDHHMMSS-<sha>`(本次为 test 分支测试部署)。
 
@@ -139,11 +141,17 @@ kubectl apply -f k8s/ingress-higress.yaml
 
 ## 六、Jenkins 日常发布
 
-1. Jenkins 新建 Pipeline 任务,源指向 GitLab `http://192.168.0.81/ai_sys/xiaoan-platform.git`,branch `test`
-2. 调整 Jenkinsfile 里 `GIT_CREDENTIAL_ID`(Jenkins 凭据 ID),以及公司实际的 Harbor 登录方式
-3. **首跑**勾选 `SKIP_DEPLOY`(只出镜像,为 migration 准备);日常发布不勾,直接 Build Now
+流水线已拆为前后端两条(`Jenkinsfile.backend` / `Jenkinsfile.frontend`),另有合并版 `Jenkinsfile.full` 备用(一键全量重发)。镜像 tag 各自独立,回滚各查各的 tag。
 
-Jenkins 会:nodedkbuild(node22140)npm ci → `APP_BASE_PATH=/xiaoan-platform/ NGINX_API_UPSTREAM=xiaoan-api:8080 NGINX_STREAM_UPSTREAM=xiaoan-stream:8081 npm run build` → docker build 两个镜像(同 tag)→ push Harbor → 6 个 Deployment set image → 逐个 rollout status(失败即 FAIL,不会静默成功)。
+1. Jenkins 分别新建 **两个 Pipeline 任务**(如 `xiaoan-backend` 和 `xiaoan-ui`),源都指向 GitLab `http://192.168.0.81/ai_sys/xiaoan-platform.git`,branch `test`,Script Path 分别填 `Jenkinsfile.backend` / `Jenkinsfile.frontend`
+2. 调整两份 Jenkinsfile 里 `GIT_CREDENTIAL_ID`(Jenkins 凭据 ID),以及公司实际的 Harbor 登录方式
+3. **首跑**任一流水线勾选 `SKIP_DEPLOY`(只出镜像,为 migration 准备);日常发布不勾,直接 Build Now
+
+**后端流水线**:docker build xiaoan-backend → push → 5 个后端 Deployment set image → 逐个 rollout status(不跑前端 Node 编译,发布明显更快)。
+
+**前端流水线**:nodedkbuild(node22140)npm ci → `APP_BASE_PATH=/xiaoan-platform/ NGINX_API_UPSTREAM=xiaoan-api:8080 NGINX_STREAM_UPSTREAM=xiaoan-stream:8081 npm run build` → docker build xiaoan-ui → push → 仅 xiaoan-ui set image → rollout status。
+
+**发布顺序约定**:当前后端有 breaking 改动时(API 字段/协议变更),**先发后端**(保持向后兼容),再发前端;平时改哪端发哪条流水线即可。
 
 **OCR 模型说明**:前端 build 的 prebuild 钩子从 bcebos.com 下载 6.1MB OCR 模型(sha256 固定)。首次构建需公网;之后 `frontend/public/ocr-assets/ppocrv6-tiny-20260921/` 有缓存则完全离线。若 Jenkins 无公网:把任意已成功构建过的机器上的该目录打包上传到 Jenkins workspace 同路径即可。构建 fail-closed,缺模型会直接报错而不是静默缺功能。
 
@@ -165,13 +173,17 @@ kubectl -n eboat-ai-ns get ingress
 
 ## 八、回滚
 
+前后端流水线 tag 各自独立,回滚时在对应的 Jenkins 任务控制台(或 Harbor)查各自的 `<旧tag>`:
+
 ```bash
-# 查历史 tag(Harbor 或 Jenkins 控制台),回滚到上一个正常 tag:
+# 后端回滚:查 xiaoan-backend 任务的历史 tag,5 个后端 deployment 换成同一个旧 tag:
 kubectl -n eboat-ai-ns set image deployment/xiaoan-api \
-  xiaoan-api=harbor.hengan.com:8086/eboat2/xiaoan-backend:<旧tag>
-# 5 个后端 deployment 同理换 <旧tag>;前端:
+  xiaoan-api=harbor.hengan.com:8086/eboat2/xiaoan-backend:<后端旧tag>
+# stream/worker-aily/worker-delivery/scheduler 同理换 <后端旧tag>
+
+# 前端回滚:查 xiaoan-ui 任务的历史 tag:
 kubectl -n eboat-ai-ns set image deployment/xiaoan-ui \
-  xiaoan-ui=harbor.hengan.com:8086/eboat2/xiaoan-ui:<旧tag>
+  xiaoan-ui=harbor.hengan.com:8086/eboat2/xiaoan-ui:<前端旧tag>
 
 # 或按 revision 回退:
 kubectl -n eboat-ai-ns rollout undo deployment/xiaoan-api

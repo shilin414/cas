@@ -1,0 +1,118 @@
+// xiaoan-platform BACKEND pipeline — xiaoan-backend image + 5 backend Deployments.
+// Split from Jenkinsfile.full (kept for one-shot full releases). The frontend
+// pipeline lives in Jenkinsfile.frontend.
+//
+// Flow: GitLab(test branch) → docker build xiaoan-backend → Harbor(eboat2) →
+// set image on 5 backend Deployments → rollout check.
+//
+// NEVER runs database migrations (manual ops step, k8s/README.md §四) and never
+// creates Namespace/Secret/ConfigMap — one-time kubectl applies.
+//
+// This pipeline does NOT build the frontend: no Node stage, no nodedkbuild.
+// Release order when a change spans both ends: backend first (stays backward
+// compatible), then frontend.
+
+pipeline {
+    agent any
+
+    // SKIP_DEPLOY=true: build & push image only, do not touch K8s.
+    // Used on FIRST run (workloads not applied yet) and for image-only rebuilds.
+    parameters {
+        booleanParam(name: 'SKIP_DEPLOY', defaultValue: false, description: '只构建并推送镜像，不更新 K8s')
+    }
+
+    environment {
+        HARBOR          = 'harbor.hengan.com:8086'
+        HARBOR_PROJECT  = 'eboat2'
+        NAMESPACE       = 'eboat-ai-ns'
+        GIT_CREDENTIAL_ID = 'xiaoan-gitlab-http'
+    }
+
+    stages {
+
+        stage('下载代码') {
+            steps {
+                git branch: 'test',
+                    credentialsId: "${GIT_CREDENTIAL_ID}",
+                    url: 'http://192.168.0.81/ai_sys/xiaoan-platform.git'
+            }
+        }
+
+        stage('准备版本号') {
+            steps {
+                script {
+                    env.GIT_SHORT_SHA = sh(
+                        script: 'git rev-parse --short=8 HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    // Tag is independent of the frontend pipeline's tag; rollback
+                    // looks up backend tags only.
+                    env.IMAGE_TAG = "test-${new Date().format('yyyyMMddHHmmss')}-${env.GIT_SHORT_SHA}"
+                }
+                echo "IMAGE_TAG=${env.IMAGE_TAG}"
+            }
+        }
+
+        stage('构建后端镜像') {
+            steps {
+                sh '''
+                    docker build \
+                      -f backend-go/Dockerfile \
+                      -t ${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG} \
+                      backend-go
+                '''
+            }
+        }
+
+        stage('推送镜像') {
+            steps {
+                sh '''
+                    docker push ${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+                '''
+            }
+        }
+
+        stage('更新 K8s') {
+            when { expression { return !params.SKIP_DEPLOY } }
+            steps {
+                sh '''
+                    kubectl -n ${NAMESPACE} set image \
+                      deployment/xiaoan-api \
+                      xiaoan-api=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+
+                    kubectl -n ${NAMESPACE} set image \
+                      deployment/xiaoan-stream \
+                      xiaoan-stream=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+
+                    kubectl -n ${NAMESPACE} set image \
+                      deployment/xiaoan-worker-aily \
+                      xiaoan-worker-aily=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+
+                    kubectl -n ${NAMESPACE} set image \
+                      deployment/xiaoan-worker-delivery \
+                      xiaoan-worker-delivery=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+
+                    kubectl -n ${NAMESPACE} set image \
+                      deployment/xiaoan-scheduler \
+                      xiaoan-scheduler=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+                '''
+            }
+        }
+
+        stage('检查发布状态') {
+            when { expression { return !params.SKIP_DEPLOY } }
+            steps {
+                sh '''
+                    set -e
+
+                    kubectl rollout status deployment/xiaoan-api -n ${NAMESPACE} --timeout=180s
+                    kubectl rollout status deployment/xiaoan-stream -n ${NAMESPACE} --timeout=180s
+                    kubectl rollout status deployment/xiaoan-worker-aily -n ${NAMESPACE} --timeout=180s
+                    kubectl rollout status deployment/xiaoan-worker-delivery -n ${NAMESPACE} --timeout=180s
+                    kubectl rollout status deployment/xiaoan-scheduler -n ${NAMESPACE} --timeout=180s
+                '''
+            }
+        }
+    }
+}
