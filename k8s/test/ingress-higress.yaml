@@ -1,0 +1,27 @@
+# Higress TEST entrypoint: only Host + Path → xiaoan-ui-service-test.
+# All internal routing (API → xiaoan-api-test, SSE → xiaoan-stream-test, WS →
+# xiaoan-api-test) stays inside the xiaoan-ui-test Nginx container — the
+# NGINX_API_UPSTREAM / NGINX_STREAM_UPSTREAM values are baked into the image at
+# Jenkins build time (test pipeline must use xiaoan-api-test:8080 /
+# xiaoan-stream-test:8081).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: xiaoan-ui-higress-test
+  namespace: eboat-ai-ns
+  labels:
+    app.kubernetes.io/part-of: xiaoan-platform
+    app.kubernetes.io/environment: test
+spec:
+  ingressClassName: higress
+  rules:
+    - host: ai-test.hengan.com
+      http:
+        paths:
+          - path: /xiaoan-platform
+            pathType: Prefix
+            backend:
+              service:
+                name: xiaoan-ui-service-test
+                port:
+                  number: 80

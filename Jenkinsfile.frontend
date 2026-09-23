@@ -5,6 +5,12 @@
 // Flow: GitLab(test branch) → Node 22 build (nodedkbuild node22140) →
 // docker build xiaoan-ui → Harbor(eboat2) → set image on xiaoan-ui → rollout check.
 //
+// DEPLOY_ENV selects the K8s Deployment (k8s/prod/ vs k8s/test/ manifests, same
+// namespace, -test-suffixed names) AND the Nginx upstreams baked into the image:
+//   prod: xiaoan-api:8080 / xiaoan-stream:8081
+//   test: xiaoan-api-test:8080 / xiaoan-stream-test:8081
+// → one image per environment is required; tags are prefixed by environment.
+//
 // NEVER touches backend Deployments or the database.
 //
 // OCR note: the build's prebuild hook downloads a 6.1 MB OCR model
@@ -22,6 +28,7 @@ pipeline {
     // SKIP_DEPLOY=true: build & push image only, do not touch K8s.
     parameters {
         booleanParam(name: 'SKIP_DEPLOY', defaultValue: false, description: '只构建并推送镜像，不更新 K8s')
+        choice(name: 'DEPLOY_ENV', choices: ['prod', 'test'], description: '发布目标环境：prod=生产，test=测试（-test 后缀与对应 Nginx upstream）')
     }
 
     environment {
@@ -45,6 +52,9 @@ pipeline {
         stage('准备版本号') {
             steps {
                 script {
+                    env.SUFFIX = params.DEPLOY_ENV == 'test' ? '-test' : ''
+                    env.API_UPSTREAM = params.DEPLOY_ENV == 'test' ? 'xiaoan-api-test:8080' : 'xiaoan-api:8080'
+                    env.STREAM_UPSTREAM = params.DEPLOY_ENV == 'test' ? 'xiaoan-stream-test:8081' : 'xiaoan-stream:8081'
                     env.GIT_SHORT_SHA = sh(
                         script: 'git rev-parse --short=8 HEAD',
                         returnStdout: true
@@ -52,7 +62,7 @@ pipeline {
 
                     // Tag is independent of the backend pipeline's tag; rollback
                     // looks up xiaoan-ui tags only.
-                    env.IMAGE_TAG = "test-${new Date().format('yyyyMMddHHmmss')}-${env.GIT_SHORT_SHA}"
+                    env.IMAGE_TAG = "${params.DEPLOY_ENV}-${new Date().format('yyyyMMddHHmmss')}-${env.GIT_SHORT_SHA}"
                 }
                 echo "IMAGE_TAG=${env.IMAGE_TAG}"
             }
@@ -68,10 +78,11 @@ pipeline {
                       "node22140" \
                       "npm ci"
 
-                    # Build with K8s upstream service names baked into nginx.generated.conf.
+                    # Build with the environment's K8s upstream service names baked
+                    # into nginx.generated.conf.
                     nodedkbuild "$WORKSPACE/frontend" \
                       "node22140" \
-                      "APP_BASE_PATH=/xiaoan-platform/ NGINX_API_UPSTREAM=xiaoan-api:8080 NGINX_STREAM_UPSTREAM=xiaoan-stream:8081 npm run build"
+                      "APP_BASE_PATH=/xiaoan-platform/ NGINX_API_UPSTREAM=${API_UPSTREAM} NGINX_STREAM_UPSTREAM=${STREAM_UPSTREAM} npm run build"
 
                     if [ ! -d "$WORKSPACE/frontend/dist" ]; then
                         echo "前端编译失败"
@@ -110,8 +121,8 @@ pipeline {
             steps {
                 sh '''
                     kubectl -n ${NAMESPACE} set image \
-                      deployment/xiaoan-ui \
-                      xiaoan-ui=${HARBOR}/${HARBOR_PROJECT}/xiaoan-ui:${IMAGE_TAG}
+                      deployment/xiaoan-ui${SUFFIX} \
+                      xiaoan-ui${SUFFIX}=${HARBOR}/${HARBOR_PROJECT}/xiaoan-ui:${IMAGE_TAG}
                 '''
             }
         }
@@ -120,7 +131,7 @@ pipeline {
             when { expression { return !params.SKIP_DEPLOY } }
             steps {
                 sh '''
-                    kubectl rollout status deployment/xiaoan-ui -n ${NAMESPACE} --timeout=180s
+                    kubectl rollout status deployment/xiaoan-ui${SUFFIX} -n ${NAMESPACE} --timeout=180s
                 '''
             }
         }

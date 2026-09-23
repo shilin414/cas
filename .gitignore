@@ -42,8 +42,9 @@ id_ed25519.*
 *.tfstate
 *.tfstate.*
 
-# Real K8s Secret manifest (k8s/secret.example.yaml is the committed template)
+# Real K8s Secret manifests (k8s/prod/secret.example.yaml is the committed template)
 k8s/secret.yaml
+k8s/*/secret.yaml
 
 # -----------------------------------------------------------------------------
 # Local agent, planning, test, and runtime artifacts

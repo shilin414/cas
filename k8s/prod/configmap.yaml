@@ -1,5 +1,5 @@
-# xiaoan-platform backend configuration — non-secret values only.
-# Secrets live in k8s/secret.yaml (created by ops from k8s/secret.example.yaml).
+# xiaoan-platform PROD backend configuration — non-secret values only.
+# Values mirror backend-go/.env.production.local. Secrets live in k8s/prod/secret.yaml.
 # All keys map 1:1 to backend-go/internal/platform/config (getEnv names).
 # Env vars from the Secret override ConfigMap keys (envFrom order in the Deployments:
 # configMapRef first, then secretRef).
@@ -23,7 +23,7 @@ data:
   PPROF_ENABLED: "false"
 
   # ── External MySQL 5.7 (host/user/password are Secret-only) ──
-  DB_PORT: "3306"
+  DB_PORT: "23306"
   DB_NAME: xiaoan
   DB_MAX_OPEN_CONNS: "40"
   DB_MAX_IDLE_CONNS: "10"
@@ -49,7 +49,7 @@ data:
   # ── Feishu / Aily ──
   FEISHU_BASE_URL: https://open.feishu.cn
   ENTERPRISE_ACL_ENABLED: "false"
-  ENTERPRISE_RBAC_ENABLED: "false"
+  ENTERPRISE_RBAC_ENABLED: "true"
   AILY_BASE_URL: https://open.feishu.cn/open-apis
   AILY_START_RATE_LIMIT: "10"
   AILY_MAX_INFLIGHT: "100"
@@ -90,3 +90,7 @@ data:
   # Feishu callbacks / share URLs point at the public entrypoint.
   PUBLIC_ORIGIN: https://ai.hengan.com
   APP_BASE_PATH: /xiaoan-platform/
+
+  # ── Enterprise / AI model egress ──
+  # Exact private hosts allowed for server-side AI model calls; no wildcards.
+  AI_MODEL_ALLOWED_HOSTS: 192.168.212.121

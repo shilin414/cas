@@ -1,0 +1,45 @@
+# One-shot manual migration job — run by ops, NEVER by Jenkins or as an
+# InitContainer (guide §29: migrations are a reviewed manual step).
+# Usage:
+#   1. Replace REPLACE_WITH_IMAGE_TAG with the xiaoan-backend tag to deploy.
+#   2. kubectl apply -f k8s/migrate-job.yaml
+#   3. kubectl -n eboat-ai-ns logs job/xiaoan-migrate-test -f   # expect "migrations applied"
+#   4. kubectl -n eboat-ai-ns delete job xiaoan-migrate-test    # cleanup so it can re-run later
+# backoffLimit 0: a failed migration must NOT be retried automatically.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: xiaoan-migrate-test
+  namespace: eboat-ai-ns
+  labels:
+    app.kubernetes.io/part-of: xiaoan-platform
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: xiaoan-migrate-test
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: harbor-secret
+      containers:
+        - name: xiaoan-migrate-test
+          image: harbor.hengan.com:8086/eboat2/xiaoan-backend:REPLACE_WITH_IMAGE_TAG
+          # Reads DB_* from xiaoan-secret; migrations ship at /app/db/migrations
+          # (image WORKDIR /app + default -dir db/migrations).
+          # NOT `scheduler --migrate`, NOT `api -migrate` — the standalone binary.
+          command: [migrate]
+          envFrom:
+            - configMapRef:
+                name: xiaoan-config-test
+            - secretRef:
+                name: xiaoan-secret-test
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

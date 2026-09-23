@@ -1,0 +1,93 @@
+# xiaoan-platform TEST backend configuration — non-secret values only.
+# Values mirror backend-go/.env.test.local. Secrets live in k8s/test/secret.yaml.
+# All keys map 1:1 to backend-go/internal/platform/config (getEnv names).
+# Env vars from the Secret override ConfigMap keys (envFrom order in the Deployments:
+# configMapRef first, then secretRef).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: xiaoan-config-test
+  namespace: eboat-ai-ns
+  labels:
+    app.kubernetes.io/part-of: xiaoan-platform
+    app.kubernetes.io/environment: test
+data:
+  # ── Runtime profile ──
+  # test (not production): cookies stay non-Secure; secret enforcement relaxed.
+  APP_ENV: test
+  LOG_LEVEL: info
+
+  # ── Process addresses ──
+  API_ADDR: :8080
+  STREAM_ADDR: :8081
+  METRICS_ADDR: :9090
+  PPROF_ENABLED: "false"
+
+  # ── External MySQL 5.7 (host/user/password are Secret-only) ──
+  DB_PORT: "20336"
+  DB_NAME: xiaoan
+  DB_MAX_OPEN_CONNS: "40"
+  DB_MAX_IDLE_CONNS: "10"
+  DB_CONN_MAX_LIFETIME: 30m
+  DB_CONN_MAX_IDLE_TIME: 5m
+  DB_QUERY_TIMEOUT: 15s
+
+  # ── External Redis (password is Secret-only) ──
+  # Test topology per backend-go/.env.test.local: standalone on 192.168.211.26:6381, DB 2.
+  REDIS_MODE: standalone
+  REDIS_DATABASE: "2"
+  REDIS_KEY_PREFIX: xiaoan3
+  REDIS_CLUSTER_NODES: ""
+  REDIS_CLUSTER_MAX_REDIRECTS: "3"
+  REDIS_CONNECT_TIMEOUT: 10s
+  REDIS_TIMEOUT: 5s
+  REDIS_POOL_TIMEOUT: 3s
+  REDIS_POOL_SIZE: "20"
+  REDIS_MIN_IDLE_CONNS: "5"
+  REDIS_MAX_IDLE_CONNS: "10"
+
+  # ── Feishu / Aily ──
+  FEISHU_BASE_URL: https://open.feishu.cn
+  ENTERPRISE_ACL_ENABLED: "false"
+  ENTERPRISE_RBAC_ENABLED: "true"
+  AILY_BASE_URL: https://open.feishu.cn/open-apis
+  AILY_START_RATE_LIMIT: "10"
+  AILY_MAX_INFLIGHT: "100"
+  AILY_POLL_BACKOFF_SECONDS: 1,2,3,5
+  AILY_STREAM_TIMEOUT: 330s
+  AILY_REQUEST_TIMEOUT: 30s
+
+  # ── Execution plane ──
+  RUN_LEASE_SECONDS: 120s
+  RUN_LEASE_HEARTBEAT_SECONDS: 30s
+  RUN_CLAIM_BATCH_SIZE: "10"
+  RUN_REAPER_INTERVAL: 20s
+  OUTBOX_RELAY_INTERVAL: 500ms
+  WORKER_CONCURRENCY: "10"
+  RUN_PRIORITY_WEIGHTS: 7,1,2
+
+  # ── Session / auth ──
+  SESSION_TTL: 12h
+  SESSION_COOKIE_NAME: studio_session
+  CSRF_COOKIE_NAME: studio_csrf
+  # Nginx pods are the immediate reverse proxy; add the pod CIDR if needed after
+  # verifying the actual pod network (kubectl get pod -o wide on a xiaoan-ui pod).
+  TRUSTED_PROXY_CIDRS: 127.0.0.1/32,::1/128,172.16.0.0/12
+
+  # ── Storage: NFS-backed localfs ──
+  STORAGE_DRIVER: localfs
+  STORAGE_LOCAL_ROOT: /app/data/storage
+
+  # ── Observability ──
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_SERVICE_NAME: xiaoan-backend-test
+  OTEL_SAMPLING_RATE: "0.1"
+
+  # ── Deployment path ──
+  # Test entrypoint host; PUBLIC_ORIGIN must NOT include a path.
+  PUBLIC_ORIGIN: http://ai-test.hengan.com
+  APP_BASE_PATH: /xiaoan-platform/
+
+  # ── Enterprise / AI model egress ──
+  # Exact private hosts allowed for server-side AI model calls; no wildcards.
+  AI_MODEL_ALLOWED_HOSTS: 192.168.212.121

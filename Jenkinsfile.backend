@@ -1,9 +1,13 @@
-// xiaoan-platform BACKEND pipeline — xiaoan-backend image + 5 backend Deployments.
+// xiaoan-platform BACKEND pipeline — xiaoan-backend image + backend Deployments.
 // Split from Jenkinsfile.full (kept for one-shot full releases). The frontend
 // pipeline lives in Jenkinsfile.frontend.
 //
 // Flow: GitLab(test branch) → docker build xiaoan-backend → Harbor(eboat2) →
-// set image on 5 backend Deployments → rollout check.
+// set image on backend Deployments → rollout check.
+//
+// DEPLOY_ENV selects the K8s Deployment set (k8s/prod/ vs k8s/test/ manifests,
+// same namespace, -test-suffixed resource names for the test environment).
+// Tag prefix follows the environment so Harbor tags are distinguishable.
 //
 // NEVER runs database migrations (manual ops step, k8s/README.md §四) and never
 // creates Namespace/Secret/ConfigMap — one-time kubectl applies.
@@ -19,6 +23,7 @@ pipeline {
     // Used on FIRST run (workloads not applied yet) and for image-only rebuilds.
     parameters {
         booleanParam(name: 'SKIP_DEPLOY', defaultValue: false, description: '只构建并推送镜像，不更新 K8s')
+        choice(name: 'DEPLOY_ENV', choices: ['prod', 'test'], description: '发布目标环境：prod=生产 Deployments，test=测试 Deployments（-test 后缀）')
     }
 
     environment {
@@ -41,6 +46,7 @@ pipeline {
         stage('准备版本号') {
             steps {
                 script {
+                    env.SUFFIX = params.DEPLOY_ENV == 'test' ? '-test' : ''
                     env.GIT_SHORT_SHA = sh(
                         script: 'git rev-parse --short=8 HEAD',
                         returnStdout: true
@@ -48,7 +54,7 @@ pipeline {
 
                     // Tag is independent of the frontend pipeline's tag; rollback
                     // looks up backend tags only.
-                    env.IMAGE_TAG = "test-${new Date().format('yyyyMMddHHmmss')}-${env.GIT_SHORT_SHA}"
+                    env.IMAGE_TAG = "${params.DEPLOY_ENV}-${new Date().format('yyyyMMddHHmmss')}-${env.GIT_SHORT_SHA}"
                 }
                 echo "IMAGE_TAG=${env.IMAGE_TAG}"
             }
@@ -78,24 +84,24 @@ pipeline {
             steps {
                 sh '''
                     kubectl -n ${NAMESPACE} set image \
-                      deployment/xiaoan-api \
-                      xiaoan-api=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+                      deployment/xiaoan-api${SUFFIX} \
+                      xiaoan-api${SUFFIX}=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
 
                     kubectl -n ${NAMESPACE} set image \
-                      deployment/xiaoan-stream \
-                      xiaoan-stream=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+                      deployment/xiaoan-stream${SUFFIX} \
+                      xiaoan-stream${SUFFIX}=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
 
                     kubectl -n ${NAMESPACE} set image \
-                      deployment/xiaoan-worker-aily \
-                      xiaoan-worker-aily=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+                      deployment/xiaoan-worker-aily${SUFFIX} \
+                      xiaoan-worker-aily${SUFFIX}=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
 
                     kubectl -n ${NAMESPACE} set image \
-                      deployment/xiaoan-worker-delivery \
-                      xiaoan-worker-delivery=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+                      deployment/xiaoan-worker-delivery${SUFFIX} \
+                      xiaoan-worker-delivery${SUFFIX}=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
 
                     kubectl -n ${NAMESPACE} set image \
-                      deployment/xiaoan-scheduler \
-                      xiaoan-scheduler=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
+                      deployment/xiaoan-scheduler${SUFFIX} \
+                      xiaoan-scheduler${SUFFIX}=${HARBOR}/${HARBOR_PROJECT}/xiaoan-backend:${IMAGE_TAG}
                 '''
             }
         }
@@ -106,11 +112,11 @@ pipeline {
                 sh '''
                     set -e
 
-                    kubectl rollout status deployment/xiaoan-api -n ${NAMESPACE} --timeout=180s
-                    kubectl rollout status deployment/xiaoan-stream -n ${NAMESPACE} --timeout=180s
-                    kubectl rollout status deployment/xiaoan-worker-aily -n ${NAMESPACE} --timeout=180s
-                    kubectl rollout status deployment/xiaoan-worker-delivery -n ${NAMESPACE} --timeout=180s
-                    kubectl rollout status deployment/xiaoan-scheduler -n ${NAMESPACE} --timeout=180s
+                    kubectl rollout status deployment/xiaoan-api${SUFFIX} -n ${NAMESPACE} --timeout=180s
+                    kubectl rollout status deployment/xiaoan-stream${SUFFIX} -n ${NAMESPACE} --timeout=180s
+                    kubectl rollout status deployment/xiaoan-worker-aily${SUFFIX} -n ${NAMESPACE} --timeout=180s
+                    kubectl rollout status deployment/xiaoan-worker-delivery${SUFFIX} -n ${NAMESPACE} --timeout=180s
+                    kubectl rollout status deployment/xiaoan-scheduler${SUFFIX} -n ${NAMESPACE} --timeout=180s
                 '''
             }
         }

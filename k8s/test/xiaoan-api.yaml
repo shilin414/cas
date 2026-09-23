@@ -1,0 +1,81 @@
+# xiaoan-api — short-request REST plane.
+# Same xiaoan-backend image as all other roles; `command:` selects the process.
+# Probes: /health/ready pings MySQL + Redis (verified in
+# backend-go/internal/transport/http/server.go handleReady).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xiaoan-api-test
+  namespace: eboat-ai-ns
+  labels:
+    app: xiaoan-api-test
+    app.kubernetes.io/part-of: xiaoan-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: xiaoan-api-test
+  template:
+    metadata:
+      labels:
+        app: xiaoan-api-test
+    spec:
+      imagePullSecrets:
+        - name: harbor-secret
+      containers:
+        - name: xiaoan-api-test
+          image: harbor.hengan.com:8086/eboat2/xiaoan-backend:REPLACE_WITH_IMAGE_TAG
+          command: [api]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: xiaoan-config-test
+            - secretRef:
+                name: xiaoan-secret-test
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: xiaoan-storage
+              mountPath: /app/data/storage
+      volumes:
+        - name: xiaoan-storage
+          nfs:
+            server: 192.168.212.165
+            path: /db/k8s-ai-nfs/xiaoan-platform-data-env-test
+            readOnly: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: xiaoan-api-test
+  namespace: eboat-ai-ns
+  labels:
+    app: xiaoan-api-test
+spec:
+  selector:
+    app: xiaoan-api-test
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
