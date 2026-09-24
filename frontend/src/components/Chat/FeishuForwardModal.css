@@ -308,4 +308,33 @@
 .ffm-summary { padding: 12px; margin-bottom: 12px; border-radius: 10px; background: var(--color-bg-surface); border: 1px solid var(--color-border); color: var(--color-text-sec); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 .ffm-summary p { margin: 4px 0; }
 .ffm-cancel, .ffm-send { min-height: 44px; }
-@media (max-width: 600px) { .ffm-list { max-height: 32dvh; } }
+@media (max-width: 600px) {
+  .ffm-list { max-height: 32dvh; }
+  .ffm-modal .ant-modal-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow-y: auto;
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 12px
+      calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .ffm-modal .ant-modal {
+    inset-block-start: auto;
+    width: min(460px, 100%) !important;
+    max-height: calc(100dvh - env(safe-area-inset-top, 0px)
+      - env(safe-area-inset-bottom, 0px) - 24px);
+    margin: 0;
+    padding-bottom: 0;
+  }
+  .ffm-modal .ant-modal-content {
+    display: flex;
+    max-height: inherit;
+    flex-direction: column;
+  }
+  .ffm-modal .ant-modal-body {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 16px;
+  }
+}

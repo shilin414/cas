@@ -147,6 +147,10 @@
   background: color-mix(in srgb, var(--color-primary) 10%, transparent);
 }
 
+.mobile-workbench-drawer .mobile-shell__nav-item {
+  font-size: 16px;
+}
+
 .mobile-shell__nav-item:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: -2px;

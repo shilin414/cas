@@ -337,6 +337,7 @@ const FeishuForwardModal: React.FC<FeishuForwardModalProps> = ({
       title="转发到飞书"
       width={460}
       centered
+      rootClassName="ffm-modal"
       destroyOnHidden
     >
       {showReauth ? (
