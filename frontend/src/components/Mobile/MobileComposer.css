@@ -61,6 +61,24 @@
   overflow-y: auto;
 }
 
+/* WebKit/Chromium paint a NATIVE focus ring on a focused textarea while
+   `-webkit-appearance` is still the default `auto`. That ring hugs the
+   composer's outer rect but ignores its border-radius, so the rounded
+   composer ends up trailed by a hard-cornered blue rectangle. `outline: none`
+   — on the base rule or on `:focus` — does NOT remove it, because the ring
+   is part of the native appearance, not the outline. Only resetting
+   `appearance` suppresses it. (`.chat-input-textarea` carries a :focus
+   reset for the same visual bug but only covers outline; this control needs
+   the appearance reset too.) */
+.mobile-composer__textarea:focus,
+.mobile-composer__textarea:focus-visible {
+  outline: none;
+  border: none;
+  box-shadow: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .mobile-composer__textarea::placeholder {
   color: var(--color-text-dim);
 }
