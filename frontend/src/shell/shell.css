@@ -17,6 +17,7 @@
   align-items: center;
   gap: 8px;
   min-height: var(--header-h);
+  min-height: calc(var(--header-h) + env(safe-area-inset-top));
   padding: 0 12px;
   padding-top: env(safe-area-inset-top);
   border-bottom: 1px solid var(--color-border);

@@ -26,6 +26,7 @@
 /* Header */
 .share-header {
   padding: 32px 24px 20px;
+  padding-top: calc(32px + env(safe-area-inset-top));
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg-surface);
 }
