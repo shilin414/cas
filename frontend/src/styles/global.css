@@ -80,6 +80,26 @@ body {
   color: var(--color-on-primary);
 }
 
+/* ============================================
+   iOS input focus auto-zoom guard (§8.4)
+   ============================================ */
+
+/* iOS WebKit zooms the page whenever a focused input/textarea/select has a
+   computed font-size under 16px — and does NOT zoom back out on blur, so the
+   page stays offset until the user pinch-zooms manually. Per-surface fixes
+   rot (the mobile composer shipped 15px for months; the schedule editor was
+   patched once before), so enforce the threshold for every editable control
+   at mobile widths. !important is deliberate: the guard must also beat
+   component rules like `.mobile-console-search .ant-input { font-size: 15px }`.
+   768px mirrors MOBILE_MAX_WIDTH in shell/useIsMobile.ts. */
+@media (max-width: 768px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 a {
   color: var(--color-primary);
   text-decoration: none;

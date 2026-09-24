@@ -50,7 +50,10 @@
   background: transparent;
   color: var(--color-text);
   font-family: inherit;
-  font-size: 15px;
+  /* 16px is the iOS focus-auto-zoom threshold: smaller and Safari zooms the
+     page in on focus and never zooms back out after blur — the page stays
+     offset until the user pinch-zooms manually (§8.4). */
+  font-size: 16px;
   line-height: 1.5;
   resize: none;
   outline: none;
