@@ -258,7 +258,7 @@ kubectl -n eboat-ai-ns rollout undo deployment/xiaoan-api
 
 | 症状 | 排查 |
 |---|---|
-| Pod `ImagePullBackOff` | `kubectl -n eboat-ai-ns describe pod <p>`;查 harbor-secret 是否在 ns、Harbor 项目名/tag 是否正确 |
+| Pod `ImagePullBackOff` | `kubectl -n eboat-ai-ns describe pod <p>`;查 harbor-secret 是否在 ns、Harbor 项目名/tag 是否正确。若镜像 tag 是 `REPLACE_WITH_IMAGE_TAG`,说明 apply 过占位 YAML 且该 Deployment 从未跑过 set image——重跑一次 Jenkins 流水线即可 |
 | Pod `CreateContainerConfigError` | ConfigMap/Secret 未 apply,或 key 名对不上(`kubectl describe` 会列出缺失 key) |
 | API pod 起不来,log 报 `production config missing secrets: ...` | Secret 里缺 FEISHU_APP_SECRET / DB_PASSWORD / TOKEN_ENCRYPTION_KEY(`APP_ENV=production` 强制校验) |
 | `/health/ready` 一直 503 | 后端连不上 MySQL/Redis:`kubectl exec` 进 pod 用 nc 验证 <DB_HOST>:3306 / <REDIS_HOST>:6379 |
@@ -267,3 +267,53 @@ kubectl -n eboat-ai-ns rollout undo deployment/xiaoan-api
 | 登录后又跳回登录页 | 非 HTTPS 访问(cookie Secure)或 TRUSTED_PROXY_CIDRS 不含实际代理 IP 段 |
 | 深链刷新 404 | Ingress path /xiaoan-platform 未生效,或镜像里 nginx.generated.conf 生成时 APP_BASE_PATH 不对 |
 | 飞书回调失败 | `PUBLIC_ORIGIN` 必须是 `https://ai.hengan.com`(不带路径);回调地址=PUBLIC_ORIGIN + basePath + /auth/feishu/callback。⚠️ 两环境共用同一飞书应用,回调只会打到一个 PUBLIC_ORIGIN——飞书网页登录回调按环境手动切换,或后续为 test 环境申请独立飞书应用 |
+| ui pod `CrashLoopBackOff`,log 报 `host not found in upstream "api"` | 镜像里 nginx.generated.conf 用了 dev 默认 upstream——构建期环境变量没传进 nodedkbuild 容器。「生成 Nginx 配置」stage 已修复;若该 stage 的 grep 校验红了,先确认宿主机 `node -v` ≥ 16 |
+
+## 十、首次部署踩坑实录(2026-09-23/24,test 环境首次部署)
+
+按时间序记录实际遇到的问题与修复,供以后排查和回顾。所有修复均已落入仓库,这里保留的是**症状 → 根因 → 解法**的对应关系。
+
+### 1. 前端构建:nodedkbuild 不接受带环境变量的命令串
+
+- **症状**:`buildcmd.sh: ... APP_BASE_PATH=/xiaoan-platform/: not found`,前端编译失败。
+- **根因**:`nodedkbuild` 的第三个参数被当作**单个命令名**执行,不做 shell 分词;`"APP_BASE_PATH=... npm run build"` 整串被当成可执行文件名去找。
+- **解法**:命令参数只传命令本身;环境变量不能内联。
+
+### 2. 前端构建:nodedkbuild 容器不继承宿主 shell 的环境变量(上一条的延续)
+
+- **症状**:构建"成功",但 pod 起不来,`kubectl logs --previous` 报 `host not found in upstream "api"`——镜像里的 nginx.generated.conf 用了 dev 默认 upstream `api`。
+- **根因**:第一次修复用 `export` + `npm run build`,仍然失败。`nodedkbuild` 在**自己的 Node 容器里**执行命令,宿主 shell export 的变量传不进去 → 构建里跑的 deployment.mjs 读不到 `NGINX_API_UPSTREAM`,静默回退到 `api:8080`(配置错也会构建成功,直到容器启动才炸)。
+- **解法**:流水线新增独立 stage「生成 Nginx 配置」:构建后在 **Jenkins 宿主机**上直接 `node scripts/deployment.mjs` 重新生成 conf(宿主机 node v16 即可),并用 grep **fail-closed 校验** upstream 必须是本环境的值,不对就红字失败,绝不静默烤错配置进镜像。
+- **教训**:`nodedkbuild` 与普通 shell 封装行为不同——命令按名单执行、环境不透传。给它传复杂命令前先验证语义;生成的配置类产物必须加内容校验(fail-closed),不能信任"构建成功"。
+
+### 3. 后端构建:Docker 容器内 `go mod download` 超时
+
+- **症状**:`RUN go mod download` 报 `proxy.golang.org ... dial tcp: i/o timeout`(等了 240 秒)。
+- **根因**:构建容器默认走 `proxy.golang.org`(被墙);Jenkins"能上外网"不代表能到 Google 的域名。
+- **解法**:`backend-go/Dockerfile` 构建阶段 `ARG/ENV GOPROXY=https://goproxy.cn,https://goproxy.io,direct`;以后公司有内部代理可 `--build-arg GOPROXY=...` 覆盖。
+- **教训**:涉及外网的构建步骤都应显式指定国内可达的源(npm 已是内部源没事,Go 默认源必须改)。
+
+### 4. NFS:目录存在但 pod 挂载报 `No such file or directory`
+
+- **症状**:全部后端 pod 卡 `ContainerCreating`,describe 事件:`mount.nfs ... failed, reason given by server: No such file or directory`;但 NFS server 上目录真实存在。
+- **根因**:本 NFS server 按**子目录逐个导出**(`/etc/exports` 逐行列),新建的附件目录没追加导出,`exportfs` 也没跑——NFS 对未导出路径就报这个误导性的错。**目录存在 ≠ 已导出**。
+- **解法**:NFS server 上追加两行 exports(`xiaoan-platform-data`、`xiaoan-platform-data-test`,选项照抄兄弟目录 `*(rw,no_root_squash)`)→ `exportfs -ra` → `showmount -e localhost` 验证两个目录都在。kubelet 自动重试挂载,pod 几分钟内自愈,无需删 pod。
+- **教训**:前置条件第 4 步已更新为 mkdir+chown、追加 exports、exportfs 验证三步缺一不可;`showmount -e` 里没有的路径挂载必失败。
+
+### 5. 多代 pod 残留干扰排查
+
+- **症状**:同 namespace 里同时存在 ImagePullBackOff(tag 是 `REPLACE_WITH_IMAGE_TAG` 占位)、旧版 CrashLoop、新版 pod 三代 ui pod,`kubectl logs -l app=...` 随机选到最老的看不到有效日志。
+- **根因**:昨晚直接 apply 过占位 YAML(为了预检),产生了拉不到占位 tag 的 ReplicaSet;rollout 卡住时新旧 ReplicaSet 并存。
+- **解法**:`logs` 指定具体 pod 名(优先最新 ReplicaSet,加 `--previous` 看崩溃前输出);rollout 成功后 K8s 自动清理旧代。临时 apply 占位 YAML 做预检没问题,但要预期到会留下这类"僵尸"pod。
+- **教训**:排查时先 `get pods` 看清哪代是当前版本(对照 Deployment 的 NewReplicaSet),别被历史残留的报错带偏。
+
+### 附:排查顺序速查(按依赖从底往上)
+
+```
+1. pod 调度了吗          → get pods:Pending = 资源不足;ContainerCreating = 镜像/挂载/配置
+2. 镜像拉到了吗          → ImagePullBackOff:describe 看 tag 与 harbor-secret
+3. 卷挂上了吗            → describe events 看 FailedMount;NFS 问题见上文第 4 条
+4. 容器起来了吗          → CrashLoopBackOff:logs --previous 看退出前输出
+5. 探针过了吗            → Running 但 READY 0/1:logs 看应用级错误(DB/Redis 连接等)
+6. 端到端通吗            → 浏览器/Ingress/深链刷新/SSE,见第七节验证清单
+```
