@@ -54,4 +54,8 @@
 .sidebar-navigation-icon, .mobile-workbench-drawer .mobile-shell__nav-icon { display: inline-flex; width: 20px; height: 20px; flex: 0 0 20px; align-items: center; justify-content: center; font-size: 16px; line-height: 1; }
 .mobile-workbench-drawer__section > button:hover { background: var(--color-bg-hover); }
 .mobile-workbench-drawer__section > button > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 768px) {
+  .mobile-workbench-drawer__section > button:not(.mobile-workbench-drawer__all),
+  .mobile-workbench-drawer .task-list-item--compact .task-list-item__open { font-size: 16px; }
+}
 @media (min-width: 769px) and (max-width: 1024px) { .workbench-inspector { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; box-shadow: var(--shadow-lg); } }
