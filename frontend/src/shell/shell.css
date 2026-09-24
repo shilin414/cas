@@ -104,6 +104,12 @@
   position: relative;
 }
 
+/* The navigation drawer is portalled outside .mobile-shell, so its own
+   Ant Design header must keep the status-bar clearance. */
+.mobile-shell__drawer .ant-drawer-header {
+  padding-top: calc(16px + env(safe-area-inset-top));
+}
+
 .mobile-shell__nav {
   display: flex;
   flex-direction: column;

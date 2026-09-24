@@ -32,7 +32,7 @@
 .workbench-inspector header strong { flex: 1; }
 .workbench-inspector header button { border: 0; background: transparent; color: var(--color-text); cursor: pointer; }
 .workbench-inspector__body { padding: var(--space-7); color: var(--color-text-sec); }
-.mobile-workbench-drawer { display: flex; min-height: 100%; flex-direction: column; }
+.mobile-workbench-drawer { display: flex; min-height: 100%; flex-direction: column; padding-bottom: env(safe-area-inset-bottom); }
 .mobile-workbench-drawer__section { padding: var(--space-5) var(--space-3); border-bottom: 1px solid var(--color-border); }
 .mobile-workbench-drawer__account { margin-top: auto; }
 @media (min-width: 769px) and (max-width: 1024px) { .workbench-inspector { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; box-shadow: var(--shadow-lg); } }

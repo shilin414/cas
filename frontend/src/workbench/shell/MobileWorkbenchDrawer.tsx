@@ -9,6 +9,7 @@ import { useAdminPermissionStore } from '@/stores/useAdminPermissionStore';
 import { useWorkspaceBootstrapStore } from '@/stores/useWorkspaceBootstrapStore';
 import RecentTaskList from '../tasks/RecentTaskList';
 import { useRecentCapabilities } from '../capability/useRecentCapabilities';
+import './workbench-shell.css';
 
 export default function MobileWorkbenchDrawer({ close }: { close: () => void }) {
   const navigate = useNavigate();
