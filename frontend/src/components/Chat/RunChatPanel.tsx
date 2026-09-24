@@ -754,7 +754,7 @@ const RunChatPanel: React.FC<RunChatPanelProps> = ({
         </div>
       )}
 
-      <div className={`chat-input-area${isMobile ? ' chat-input-area--mobile' : ''}`}>
+      <div className={`chat-input-area${isMobile ? ' chat-input-area--mobile' : ''}${isMobile && selectMode ? ' chat-input-area--select' : ''}`}>
         <div className="chat-input-wrapper">
           {/* ONE hidden picker for both shells: the desktop paperclip and the
               mobile `+` sheet both open THIS input, so validateAttachment →

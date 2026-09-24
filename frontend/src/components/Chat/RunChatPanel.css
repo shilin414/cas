@@ -407,6 +407,12 @@
 /* ── 移动端适配 ──────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
+  /* Selection mode replaces MobileComposer, so it must provide its own home
+     indicator clearance instead of inheriting the composer's safe-area inset. */
+  .chat-container .chat-input-area--mobile.chat-input-area--select {
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  }
+
   /* 选择操作栏：窄屏换行，主按钮占满剩余宽度便于点按。 */
   .run-chat-select-bar {
     flex-wrap: wrap;

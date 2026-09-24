@@ -23,7 +23,7 @@ const LoginPage: React.FC = () => {
     <div className="animate-fade-in-scale rounded-xl border border-border bg-card/80 p-8 shadow-lg backdrop-blur-xl">
       <div className="mb-8 text-center">
         <h1 className="animate-logo-reveal font-display text-2xl font-bold text-primary">
-          Creation Studio
+          小安工作助手
         </h1>
         <Text className="mt-2 block text-text-sec">
           {loggedOut ? '已安全退出' : '使用飞书账号登录'}
