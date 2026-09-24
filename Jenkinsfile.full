@@ -67,13 +67,6 @@ pipeline {
                       "node22140" \
                       "npm ci"
 
-                    # nodedkbuild's command argument is executed as a single
-                    # command name (no shell word-splitting) — env vars must be
-                    # exported here so the npm child process inherits them.
-                    export APP_BASE_PATH=/xiaoan-platform/
-                    export NGINX_API_UPSTREAM=xiaoan-api:8080
-                    export NGINX_STREAM_UPSTREAM=xiaoan-stream:8081
-
                     # Build with K8s upstream service names baked into nginx.generated.conf.
                     # prebuild hook downloads OCR models (6.1 MB, sha256-pinned); after the
                     # first successful build the cache makes this step fully offline.
@@ -90,6 +83,28 @@ pipeline {
                         echo "nginx.generated.conf 未生成，部署脚本未执行"
                         exit 1
                     fi
+                '''
+            }
+        }
+
+        stage('生成 Nginx 配置') {
+            steps {
+                sh '''
+                    # nodedkbuild runs commands inside its own Node container and
+                    # does NOT propagate this shell's exported env vars, so the
+                    # in-build deployment.mjs run falls back to the dev upstreams
+                    # ("api"/"stream"). Regenerate the conf here, on the Jenkins
+                    # host, where the environment is under our control.
+                    cd "$WORKSPACE/frontend"
+                    export APP_BASE_PATH=/xiaoan-platform/
+                    export NGINX_API_UPSTREAM=xiaoan-api:8080
+                    export NGINX_STREAM_UPSTREAM=xiaoan-stream:8081
+                    node scripts/deployment.mjs
+
+                    grep -q "http://xiaoan-api:8080" nginx.generated.conf \\
+                      || { echo "nginx.generated.conf 缺少生产环境 upstream"; exit 1; }
+                    grep -q "http://xiaoan-stream:8081" nginx.generated.conf \\
+                      || { echo "nginx.generated.conf 缺少生产环境 stream upstream"; exit 1; }
                 '''
             }
         }

@@ -71,15 +71,6 @@ pipeline {
                       "node22140" \
                       "npm ci"
 
-                    # nodedkbuild's command argument is executed as a single
-                    # command name (no shell word-splitting) — env vars must be
-                    # exported here so the npm child process inherits them.
-                    export APP_BASE_PATH=/xiaoan-platform/
-                    export NGINX_API_UPSTREAM=xiaoan-api-test:8080
-                    export NGINX_STREAM_UPSTREAM=xiaoan-stream-test:8081
-
-                    # Build with TEST K8s upstream service names baked into
-                    # nginx.generated.conf.
                     nodedkbuild "$WORKSPACE/frontend" \
                       "node22140" \
                       "npm run build"
@@ -93,6 +84,31 @@ pipeline {
                         echo "nginx.generated.conf 未生成，部署脚本未执行"
                         exit 1
                     fi
+                '''
+            }
+        }
+
+        stage('生成 Nginx 配置') {
+            steps {
+                sh '''
+                    # nodedkbuild runs commands inside its own Node container and
+                    # does NOT propagate this shell's exported env vars, so the
+                    # in-build deployment.mjs run sees neither APP_BASE_PATH nor
+                    # the NGINX_* upstreams and falls back to the dev defaults
+                    # ("api"/"stream"). Regenerate the conf here, on the Jenkins
+                    # host, where the environment is under our control.
+                    cd "$WORKSPACE/frontend"
+                    export APP_BASE_PATH=/xiaoan-platform/
+                    export NGINX_API_UPSTREAM=xiaoan-api-test:8080
+                    export NGINX_STREAM_UPSTREAM=xiaoan-stream-test:8081
+                    node scripts/deployment.mjs
+
+                    # Fail closed: the conf must carry the TEST upstreams before
+                    # it gets baked into the image.
+                    grep -q "xiaoan-api-test:8080" nginx.generated.conf \\
+                      || { echo "nginx.generated.conf 缺少测试环境 upstream"; exit 1; }
+                    grep -q "xiaoan-stream-test:8081" nginx.generated.conf \\
+                      || { echo "nginx.generated.conf 缺少测试环境 stream upstream"; exit 1; }
                 '''
             }
         }
