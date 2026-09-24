@@ -57,6 +57,7 @@ const NavigationSettingsModal: React.FC<NavigationSettingsModalProps> = ({
             value={iconMode}
             onChange={(value) => setIconMode(value as NavigationIconMode)}
           />
+          <p className="navigation-settings__hint">同时应用于主导航、最近使用和最近任务。</p>
         </section>
 
         <section className="navigation-settings__section" aria-labelledby="navigation-icon-customization">

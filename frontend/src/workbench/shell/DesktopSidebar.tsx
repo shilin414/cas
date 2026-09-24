@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { LeftOutlined, RightOutlined, SearchOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import AccountMenu from '@/components/AccountMenu/AccountMenu';
-import AgentAvatar from '@/components/Agents/AgentAvatar';
+import RecentNavigationIcon from '@/components/Navigation/RecentNavigationIcon';
 import { NavigationItemIcon, getVisibleNavigationItems, isNavigationItemActive } from '@/components/Navigation';
 import { routeForApplication } from '@/lib/applicationRoute';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -59,7 +59,7 @@ export default function DesktopSidebar() {
           return (
             <button type="button" key={item.id} className={active ? 'active' : ''} title={item.desktopLabel}
               onClick={() => navigate(item.path)} aria-current={active ? 'page' : undefined}>
-              <NavigationItemIcon item={item} /><span>{item.desktopLabel}</span>
+              <NavigationItemIcon item={item} className="sidebar-navigation-icon" /><span className="sidebar-navigation-label">{item.desktopLabel}</span>
             </button>
           );
         })}
@@ -69,7 +69,7 @@ export default function DesktopSidebar() {
           <section><h2>最近使用</h2>{recentCapabilities.slice(0, 6).map((item) => (
             <button type="button" className="workbench-sidebar__capability" key={item.id}
               onClick={() => navigate(routeForApplication(item))}>
-              <AgentAvatar application={item} size={24} tint={item.color} /><span>{item.name}</span>
+              <RecentNavigationIcon kind={item.kind} emoji={item.icon} /><span>{item.name}</span>
             </button>
           ))}</section>
           <section><h2>最近任务</h2><RecentTaskList items={recentTasks} limit={6} /></section>

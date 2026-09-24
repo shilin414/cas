@@ -53,7 +53,10 @@ describe('mobile account menu', () => {
 
     expect(host.textContent).toContain('测试用户');
     expect(host.textContent).toContain('E-007');
-    expect(host.textContent).toContain('界面设置');
+    const settings = host.querySelector<HTMLButtonElement>('.account-menu-panel__identity button[aria-label="导航与外观"]');
+    expect(settings).not.toBeNull();
+    await act(async () => settings?.click());
+    expect(document.body.querySelector('.ant-modal-title')?.textContent).toBe('导航与外观');
     expect(host.textContent).toContain('退出登录');
   });
 

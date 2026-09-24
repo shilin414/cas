@@ -139,7 +139,7 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
         width="82vw"
         title="小安工作助手"
         rootClassName="mobile-shell__drawer"
-        styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column' } }}
+        styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
         drawerRender={(node) => (
           <MobileDrawerSwipeSurface open={mobileNavOpen} onDismiss={() => setMobileNavOpen(false)}>
             {node}

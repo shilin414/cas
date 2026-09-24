@@ -56,19 +56,20 @@ const AccountMenu: React.FC<AccountMenuProps> = ({
         <div className="account-menu-panel">
           <div className="account-menu-panel__identity">
             {avatar}
-            <div>
+            <div className="account-menu-panel__identity-text">
               <div className="account-menu-panel__name">{userDisplayName(user)}</div>
               <div className="account-menu-panel__id">{userDisplayId(user) || user?.username || '—'}</div>
             </div>
-          </div>
-          <div className="account-menu-panel__actions">
             <Button
-              block
+              type="text"
+              className="account-menu-panel__settings"
+              aria-label="导航与外观"
+              title="导航与外观"
               icon={<SettingOutlined />}
               onClick={() => setSettingsOpen(true)}
-            >
-              界面设置
-            </Button>
+            />
+          </div>
+          <div className="account-menu-panel__actions">
             <Button
               danger
               block

@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import AccountMenu from '@/components/AccountMenu/AccountMenu';
-import AgentAvatar from '@/components/Agents/AgentAvatar';
+import RecentNavigationIcon from '@/components/Navigation/RecentNavigationIcon';
 import { NavigationItemIcon, getVisibleNavigationItems, isNavigationItemActive } from '@/components/Navigation';
 import { routeForApplication } from '@/lib/applicationRoute';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -23,6 +23,7 @@ export default function MobileWorkbenchDrawer({ close }: { close: () => void }) 
   const go = (path: string) => { close(); navigate(path); };
   return (
     <div className="mobile-workbench-drawer">
+      <div className="mobile-workbench-drawer__scroll">
       <nav className="mobile-shell__nav" aria-label="主导航">
         {getVisibleNavigationItems({ isStaff, canAccessEnterprise }).map((item) => {
           const active = isNavigationItemActive(item.id, location.pathname);
@@ -36,12 +37,13 @@ export default function MobileWorkbenchDrawer({ close }: { close: () => void }) 
       </nav>
       <section className="mobile-workbench-drawer__section"><h2>最近使用</h2>{capabilities.slice(0, 6).map((item) => (
         <button type="button" key={item.id} onClick={() => go(routeForApplication(item))}>
-          <AgentAvatar application={item} size={28} tint={item.color} /><span>{item.name}</span>
+          <RecentNavigationIcon kind={item.kind} emoji={item.icon} /><span>{item.name}</span>
         </button>
       ))}</section>
       <section className="mobile-workbench-drawer__section"><h2>最近任务</h2><RecentTaskList items={tasks} limit={6} onNavigate={close} />
         <button type="button" className="mobile-workbench-drawer__all" onClick={() => go('/tasks')}>查看全部任务 ›</button>
       </section>
+      </div>
       <div className="mobile-workbench-drawer__account"><AccountMenu variant="panel" onLogoutComplete={close} /></div>
     </div>
   );

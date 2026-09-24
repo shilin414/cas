@@ -192,7 +192,12 @@
   min-width: 0;
 }
 
+.account-menu-panel__identity-text { flex: 1; min-width: 0; }
+.account-menu-panel .account-menu-panel__settings { flex: 0 0 44px; width: 44px; height: 44px; }
 .account-menu-panel__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-text);
   font-weight: 600;
 }

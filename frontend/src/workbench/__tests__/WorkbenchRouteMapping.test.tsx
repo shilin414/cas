@@ -83,6 +83,7 @@ vi.mock('@/components/Navigation', () => ({
 }));
 vi.mock('@/components/AccountMenu/AccountMenu', () => ({ default: () => null }));
 vi.mock('@/components/Agents/AgentAvatar', () => ({ default: () => null }));
+vi.mock('@/components/Navigation/RecentNavigationIcon', () => ({ default: () => null }));
 vi.mock('@/workbench/tasks/RecentTaskList', () => ({ default: () => null }));
 vi.mock('@/workbench/capability/useRecentCapabilities', () => ({
   useRecentCapabilities: () => mocks.recentCapabilities,
