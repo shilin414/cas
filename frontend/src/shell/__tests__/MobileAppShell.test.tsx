@@ -23,16 +23,19 @@ vi.mock('antd', () => ({
   Button: ({ children, icon, onClick, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon?: React.ReactNode }) => (
     <button type="button" onClick={onClick} {...props}>{icon}{children}</button>
   ),
-  Drawer: ({ open, children, title, onClose }: {
+  Drawer: ({ open, children, title, onClose, drawerRender }: {
     open: boolean;
     children: React.ReactNode;
     title?: React.ReactNode;
     onClose: () => void;
+    drawerRender?: (node: React.ReactNode) => React.ReactNode;
   }) => open ? (
     <aside data-testid="drawer">
-      <div>{title}</div>
-      <button type="button" onClick={onClose}>关闭抽屉</button>
-      {children}
+      {drawerRender ? drawerRender(<>
+        <div>{title}</div>
+        <button type="button" onClick={onClose}>关闭抽屉</button>
+        {children}
+      </>) : children}
     </aside>
   ) : null,
 }));
@@ -75,6 +78,16 @@ function buttonByText(text: string): HTMLButtonElement {
     .find((item) => item.textContent?.includes(text));
   if (!button) throw new Error(`missing button: ${text}`);
   return button;
+}
+
+function dispatchTouch(surface: HTMLElement, type: 'touchstart' | 'touchmove' | 'touchend', x: number, y: number) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  const point = { clientX: x, clientY: y } as Touch;
+  Object.defineProperties(event, {
+    touches: { value: type === 'touchend' ? [] : [point] },
+    changedTouches: { value: [point] },
+  });
+  surface.dispatchEvent(event);
 }
 
 async function mountShell(initialPath: string) {
@@ -208,6 +221,21 @@ describe('MobileAppShell navigation regression', () => {
     await act(async () => buttonByText('应用').click());
     expect(document.querySelector('[data-testid="drawer"]')).toBeNull();
     expect(document.querySelector('[data-testid="location"]')?.textContent).toBe('/apps');
+  });
+
+  it('closes the open navigation drawer after a left swipe', async () => {
+    await mountShell('/');
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[aria-label="打开导航"]')!.click();
+    });
+    const surface = document.querySelector<HTMLElement>('.mobile-shell__swipe-surface')!;
+    vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({ width: 300 } as DOMRect);
+    await act(async () => {
+      dispatchTouch(surface, 'touchstart', 240, 300);
+      dispatchTouch(surface, 'touchmove', 110, 305);
+      dispatchTouch(surface, 'touchend', 110, 305);
+    });
+    expect(document.querySelector('[data-testid="drawer"]')).toBeNull();
   });
 
   it('returns to the mobile home route when 新任务 is clicked from a chat', async () => {
