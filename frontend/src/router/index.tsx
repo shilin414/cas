@@ -29,8 +29,6 @@ const WorkflowsPage = lazy(() => import('@/pages/Workflows/WorkflowsPage'));
 const WorkflowEditorPage = lazy(() => import('@/pages/Workflows/WorkflowEditorPage'));
 const WorkflowRunnerPage = lazy(() => import('@/pages/Workflows/WorkflowRunnerPage'));
 const SkillsPage = lazy(() => import('@/pages/Skills/SkillsPage'));
-const SchedulesPage = lazy(() => import('@/pages/Schedules/SchedulesPage')
-  .then((m) => ({ default: m.SchedulesPage })));
 // Schedules route surfaces（Architecture 2.0 §51）：详情/编辑有真实 URL。
 const ScheduleListRoute = lazy(() => import('@/pages/Schedules/ScheduleListRoute'));
 const ScheduleDetailRoute = lazy(() => import('@/pages/Schedules/ScheduleDetailRoute'));
@@ -111,10 +109,10 @@ const consolePage = { shell: { padded: true } };
 const fullWidthConsole = { shell: { padded: true } };
 const fullscreenConsole = { shell: { hideSidebar: true, hideHeader: true } };
 
-// Mobile shell handles (开发执行报告 §6): the header swaps the workspace
-// switcher for a page title; Schedules gains a create action wired by the
-// page itself via useMobileHeader. Enterprise sub-pages override the title
-// dynamically (mode: 'detail') from EnterprisePage's mobile branch.
+// Mobile shell handles: the header swaps the workspace switcher for a page
+// title; Schedules gains a create action wired by the page itself via
+// useMobileHeaderAction. Enterprise sub-page titles come from each child
+// route's handle.app (mode: 'detail').
 //
 // Architecture 2.0 (§12/§14): every top-level route also declares handle.app
 // (route meta) alongside the legacy handle.shell — useShellChrome keeps
@@ -345,7 +343,11 @@ const router = createBrowserRouter([
             index: true,
             element: (
               <Suspense fallback={<div style={{ padding: 32 }}>正在加载…</div>}>
-                <EnterpriseOverviewRoute />
+                {/* 概览也经 boundary（审查 M-3）：useRouteMeta 冒泡读取父路由
+                    /enterprise 的 enterprisePermission —— 与其余 13 个子页一致。 */}
+                <RoutePermissionBoundary>
+                  <EnterpriseOverviewRoute />
+                </RoutePermissionBoundary>
               </Suspense>
             ),
           },

@@ -410,7 +410,7 @@ describe('MobileAppShell route-aware header', () => {
 
     expect(document.querySelector('.mobile-shell__title')?.textContent)
       .toBe('智能体管理');
-    const back = document.querySelector<HTMLButtonElement>('[aria-label="返回企业控制台"]');
+    const back = document.querySelector<HTMLButtonElement>('[aria-label="返回"]');
     expect(back).toBeTruthy();
     await act(async () => back!.click());
     expect(router.state.location.pathname).toBe('/enterprise');

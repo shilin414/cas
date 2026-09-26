@@ -123,7 +123,7 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
             <button
               type="button"
               className="mobile-shell__icon-btn"
-              aria-label="返回企业控制台"
+              aria-label="返回"
               onClick={go}
             >
               <ArrowLeftOutlined />

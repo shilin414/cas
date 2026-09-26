@@ -66,3 +66,7 @@
 
 - `MobileScheduleDetail.tsx`：被 `MobileScheduleDetailPage.tsx`（路由版）取代并删除。
 - `DesktopEnterpriseConsole.tsx` / `MobileEnterpriseConsole.tsx` / `EnterprisePage.tsx`：Outlet 迁移后删除。
+- `SchedulesPage.tsx`：列表由 `ScheduleListRoute` 直接挂载，兼容壳已删（CSS 保留共享）。
+- `MobileScheduleEditor.tsx`：生产路由已由 `ScheduleEditorRoute` 接管；文件保留仅为
+  `automationEditorUI.test.tsx` 的编辑器交互回归载体（测的是 ScheduleEditorFields +
+  useScheduleEditor 状态机，非导航）。

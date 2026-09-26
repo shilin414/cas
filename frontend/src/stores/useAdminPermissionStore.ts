@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { enterpriseApi, type AdminMe } from '@/pages/Enterprise/enterpriseApi';
 import { captureSessionGeneration, registerSessionReset, sessionStillCurrent } from '@/stores/resetSessionState';
 import { subscribeAdminPermissionInvalidated } from '@/services/adminPermissionEvents';
+import { useAuthStore } from '@/stores/useAuthStore';
 import type { PermissionLoadStatus } from '@/router/permissionDecision';
 
 interface AdminPermissionState {
@@ -21,12 +22,6 @@ interface AdminPermissionState {
   canAccessConsole: () => boolean;
   invalidate: () => void;
 }
-
-const toStatus = (loading: boolean, identity: AdminMe | null, error: string | null): PermissionLoadStatus => {
-  if (error) return 'error';
-  if (loading) return 'loading';
-  return identity ? 'ready' : 'idle';
-};
 
 export const useAdminPermissionStore = create<AdminPermissionState>((set, get) => ({
   identity: null,
@@ -73,15 +68,18 @@ export const useAdminPermissionStore = create<AdminPermissionState>((set, get) =
 // 兼容导出：旧代码直接读状态元组时保持同源。
 export const adminPermissionStatus = () => useAdminPermissionStore.getState().status;
 
-// resetSessionState 之外，identity/loadedForUserId 等字段若被旁路 setState，
-// status 可能失真；toStatus 仅供测试工具还原一致状态。
-export const __resolveStatus = toStatus;
-
 registerSessionReset(() => useAdminPermissionStore.getState().clear());
 
-// 在线撤权（Architecture 2.0 §92）：权威 /v2/admin/** 403 → invalidate。
-// RoutePermissionBoundary 看到 idle 会重新 ensureLoaded；新的（更小的）
-// 权限集决定页面 403 —— 旧页面不会继续保留。
+// 在线撤权（Architecture 2.0 §92）：权威 /v2/admin/** 403 → invalidate 后
+// 主动重发 load（审查 M-4）—— 用户可能停留在没有 boundary 的页面
+// （概览/非企业页），不能只依赖挂载点触发 ensureLoaded。load 内部有
+// loading/loadedForUserId 去重；401 会话边界由 clear() 走 resetSessionState，
+// 不会进入这里循环。
 subscribeAdminPermissionInvalidated(() => {
-  useAdminPermissionStore.getState().invalidate();
+  const store = useAdminPermissionStore.getState();
+  store.invalidate();
+  const userId = useAuthStore.getState().user?.id;
+  if (userId && !useAuthStore.getState().user?.is_staff) {
+    void store.load(String(userId), true);
+  }
 });

@@ -156,6 +156,25 @@ describe('useAppNavigation', () => {
     expect(router.state.historyAction).toBe('REPLACE');
   });
 
+  it('back() on a direct-link edit fills parametrized parent with route params (审查 M-1)', async () => {
+    const router = await mountRouter(
+      [
+        { path: '/schedules' },
+        { path: '/schedules/:scheduleId' },
+        {
+          path: '/schedules/:scheduleId/edit',
+          app: { id: 'schedule-editor-edit', level: 'detail', root: '/schedules', parent: '/schedules/:scheduleId' },
+        },
+      ],
+      '/schedules/42/edit',
+    );
+    await act(async () => { probe.navigation.back(); });
+    // 不是字面量 '/schedules/:scheduleId'，而是填充后的 '/schedules/42'。
+    expect(router.state.location.pathname).toBe('/schedules/42');
+    expect(router.state.location.pathname).not.toContain(':');
+    expect(router.state.historyAction).toBe('REPLACE');
+  });
+
   it('back() without parent falls back to the route root', async () => {
     const router = await mountRouter(
       [

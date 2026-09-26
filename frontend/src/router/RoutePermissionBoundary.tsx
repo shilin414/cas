@@ -13,10 +13,10 @@ import { evaluatePermission } from './permissionDecision';
  *   loading → 确保加载并显示 Loading（绝不能提前 403）
  *   error   → 错误 + 重试（绝不解释成无权限）
  *   denied  → 403
- *   allowed → Outlet
+ *   allowed → children（index 直挂）或 <Outlet/>（子路由 layout）
  * 后端 requireAdminPermission 不在此层 —— 前端只是 UX 边界。
  */
-export const RoutePermissionBoundary: React.FC = () => {
+export const RoutePermissionBoundary: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const meta = useRouteMeta();
   const userId = useAuthStore((state) => state.user?.id);
@@ -84,7 +84,7 @@ export const RoutePermissionBoundary: React.FC = () => {
     );
   }
 
-  return <Outlet />;
+  return children !== undefined ? <>{children}</> : <Outlet />;
 };
 
 export default RoutePermissionBoundary;

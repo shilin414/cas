@@ -50,7 +50,7 @@ export default function MobileWorkbenchDrawer({ onRootNavigate, onPageNavigate, 
           <RecentNavigationIcon kind={item.kind} emoji={item.icon} /><span>{item.name}</span>
         </button>
       ))}</section>
-      <section className="mobile-workbench-drawer__section"><h2>最近任务</h2><RecentTaskList items={tasks} limit={6} />
+      <section className="mobile-workbench-drawer__section"><h2>最近任务</h2><RecentTaskList items={tasks} limit={6} onNavigate={onPageNavigate} />
         <button type="button" className="mobile-workbench-drawer__all" onClick={() => onRootNavigate('/tasks')}>查看全部任务 ›</button>
       </section>
       </div>

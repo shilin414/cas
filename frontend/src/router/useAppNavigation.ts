@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useIsMobile } from '@/shell/useIsMobile';
 import { useRouteMeta } from './useRouteMeta';
 
@@ -28,9 +28,15 @@ export interface AppNavigation {
   back(): void;
 }
 
+/** 把 parent 模板里的 :param 用当前路由参数填充（审查 M-1）。 */
+function fillRouteParams(template: string, params: Record<string, string | undefined>): string {
+  return template.replace(/:([A-Za-z0-9_]+)/g, (match, name: string) => params[name] ?? match);
+}
+
 export function useAppNavigation(): AppNavigation {
   const navigate = useNavigate();
   const location = useLocation();
+  const params = useParams();
   const isMobile = useIsMobile();
   const routeMeta = useRouteMeta();
 
@@ -74,13 +80,15 @@ export function useAppNavigation(): AppNavigation {
       return;
     }
     // Direct Link / 刷新进入：没有应用内来源，回逻辑父页面。
+    // parent 可能带路由参数模板（如 '/schedules/:scheduleId'）——用当前
+    // 路由的 params 填充，避免 replace 到字面量 ':scheduleId'。
     const parent = routeMeta?.parent;
     if (parent) {
-      navigate(parent, { replace: true });
+      navigate(fillRouteParams(parent, params), { replace: true });
       return;
     }
     navigate(routeMeta?.root ?? '/', { replace: true });
-  }, [location.state, navigate, routeMeta]);
+  }, [location.state, navigate, params, routeMeta]);
 
   return useMemo(
     () => ({ switchRoot, pushPage, replacePage, back }),
