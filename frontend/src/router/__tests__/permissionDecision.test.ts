@@ -1,53 +1,124 @@
 /**
- * permissionDecision — 权限语义回归基线（Architecture 2.0 §三十一）。
+ * permissionDecision — evaluatePermission 纯函数测试（Architecture 2.0 §8/Commit 02）。
  *
- * 先固定语义（兼容要求）：
- *
- *   is_staff        → 企业权限直接允许
- *   is_super_admin  → permission 直接允许
- *   permission 数组  → ANY（任一满足即允许）
- *   can_access_console → 非 staff 用户进入 Enterprise 的必要条件
- *
- * evaluatePermission 将随 Commit 02 实现；在此之前固定的是这些
- * 兼容不变量本身的形状，禁止为通过 CI 改成语义错误的断言。
+ * 固定的语义：
+ *   none → allowed
+ *   is_staff → 一律 allowed（企业权限 bypass）
+ *   enterprise → 非 staff 需要 can_access_console；未知状态是 loading/error
+ *   any → 任一满足（is_super_admin 经 canAny 短路）
+ *   all → 全部满足
+ * 权限尚未加载不得默认允许或拒绝。
  */
 import { describe, expect, it } from 'vitest';
+import {
+  evaluatePermission,
+  type PermissionDecisionContext,
+} from '@/router/permissionDecision';
+import {
+  allPermissions,
+  anyPermission,
+  enterprisePermission,
+  noPermission,
+} from '@/router/permissions';
 
-export const PERMISSION_INVARIANTS = {
-  /** staff 直接 bypass 所有企业权限。 */
-  staffBypassesEnterprise: true,
-  /** super admin 直接 bypass 所有 permission 检查。 */
-  superAdminBypassesPermissions: true,
-  /** 多权限数组语义是 ANY 而非 ALL。 */
-  arraySemantics: 'any' as const,
-  /** 非 staff 进入企业控制台的必要条件。 */
-  consoleRequiresAccess: true,
-} as const;
+const codes = (...list: string[]) => list;
 
-describe('permission semantics (baseline)', () => {
-  it('fixes staff bypass over enterprise permissions', () => {
-    expect(PERMISSION_INVARIANTS.staffBypassesEnterprise).toBe(true);
+function context(overrides: Partial<PermissionDecisionContext> = {}): PermissionDecisionContext {
+  const held: string[] = [];
+  const can = (permission: string) => held.includes(permission);
+  return {
+    isStaff: false,
+    permissionStatus: 'ready',
+    canAccessConsole: true,
+    can,
+    canAny: (permissions) => permissions.some(can),
+    canAll: (permissions) => permissions.every(can),
+    ...overrides,
+  };
+}
+
+/** 构造一个持有指定权限的上下文（模拟 store 的 can/canAny/canAll）。 */
+function holderContext(held: string[], overrides: Partial<PermissionDecisionContext> = {}) {
+  const can = (permission: string) => held.includes(permission);
+  return context({
+    can,
+    canAny: (permissions) => permissions.some(can),
+    canAll: (permissions) => permissions.every(can),
+    ...overrides,
+  });
+}
+
+describe('evaluatePermission', () => {
+  it('undefined and none rules are always allowed', () => {
+    expect(evaluatePermission(undefined, context())).toBe('allowed');
+    expect(evaluatePermission(noPermission(), context())).toBe('allowed');
   });
 
-  it('fixes super-admin bypass over permission checks', () => {
-    expect(PERMISSION_INVARIANTS.superAdminBypassesPermissions).toBe(true);
+  it('is_staff bypasses every rule to allowed', () => {
+    const staff = holderContext([], { isStaff: true, permissionStatus: 'idle', canAccessConsole: false });
+    expect(evaluatePermission(enterprisePermission(), staff)).toBe('allowed');
+    expect(evaluatePermission(anyPermission('audit.read'), staff)).toBe('allowed');
+    expect(evaluatePermission(allPermissions('a', 'b'), staff)).toBe('allowed');
   });
 
-  it('fixes permission arrays as ANY, not ALL', () => {
-    expect(PERMISSION_INVARIANTS.arraySemantics).toBe('any');
+  describe('enterprise rule', () => {
+    it('allowed when can_access_console is true', () => {
+      expect(evaluatePermission(enterprisePermission(), context({ canAccessConsole: true }))).toBe('allowed');
+    });
+
+    it('denied when can_access_console is false', () => {
+      expect(evaluatePermission(enterprisePermission(), context({ canAccessConsole: false }))).toBe('denied');
+    });
+
+    it('loading while permissions are still loading or idle — never a premature 403', () => {
+      expect(evaluatePermission(enterprisePermission(), context({ permissionStatus: 'loading' }))).toBe('loading');
+      expect(evaluatePermission(enterprisePermission(), context({ permissionStatus: 'idle' }))).toBe('loading');
+    });
+
+    it('error surfaces as error, not as denied', () => {
+      expect(evaluatePermission(enterprisePermission(), context({ permissionStatus: 'error' }))).toBe('error');
+    });
   });
 
-  it('fixes can_access_console as the non-staff console gate', () => {
-    expect(PERMISSION_INVARIANTS.consoleRequiresAccess).toBe(true);
+  describe('any rule', () => {
+    const rule = anyPermission('admin.user.read', 'admin.role.read');
+
+    it('allowed when exactly one listed permission is held', () => {
+      expect(evaluatePermission(rule, holderContext(codes('admin.role.read')))).toBe('allowed');
+    });
+
+    it('denied when none is held', () => {
+      expect(evaluatePermission(rule, holderContext(codes('audit.read')))).toBe('denied');
+    });
+
+    it('is_super_admin is satisfied because canAny short-circuits to true', () => {
+      // 模拟 store：super admin 的 canAny 恒真。
+      const superAdmin = holderContext([], {
+        canAny: () => true,
+      });
+      expect(evaluatePermission(rule, superAdmin)).toBe('allowed');
+    });
+
+    it('loading while status is idle or loading', () => {
+      expect(evaluatePermission(rule, holderContext([], { permissionStatus: 'loading' }))).toBe('loading');
+      expect(evaluatePermission(rule, holderContext([], { permissionStatus: 'idle' }))).toBe('loading');
+    });
+
+    it('error status yields error', () => {
+      expect(evaluatePermission(rule, holderContext([], { permissionStatus: 'error' }))).toBe('error');
+    });
   });
 
-  describe('evaluatePermission (Commit 02)', () => {
-    it.todo('is_staff short-circuits every rule to allowed');
-    it.todo('is_super_admin satisfies any/all permission rules via can()');
-    it.todo('loading status yields "loading", not "denied"');
-    it.todo('error status yields "error", not "denied"');
-    it.todo('enterprise rule requires can_access_console for non-staff');
-    it.todo('any rule passes when exactly one listed permission is held');
-    it.todo('all rule fails when only some listed permissions are held');
+  describe('all rule', () => {
+    const rule = allPermissions('a.read', 'b.read');
+
+    it('allowed only when every permission is held', () => {
+      expect(evaluatePermission(rule, holderContext(codes('a.read', 'b.read')))).toBe('allowed');
+      expect(evaluatePermission(rule, holderContext(codes('a.read')))).toBe('denied');
+    });
+
+    it('denied when none is held', () => {
+      expect(evaluatePermission(rule, holderContext([]))).toBe('denied');
+    });
   });
 });

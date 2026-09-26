@@ -28,7 +28,7 @@ vi.mock('../../enterpriseNav', () => ({
   ENTERPRISE_SECTIONS: [
     {
       title: '资源',
-      items: [{ key: 'resources/agents', label: '智能体管理', icon: null }],
+      items: [{ key: 'resources/agents', label: '智能体管理', icon: null, requiredPermission: 'resource.agent.read' }],
     },
   ],
   pagePath: (key: string) => `/enterprise/${key}`,
@@ -66,6 +66,7 @@ vi.mock('@/components/MobileConsole', () => ({
 }));
 
 import MobileEnterpriseHome from '../MobileEnterpriseHome';
+import { useAdminPermissionStore } from '@/stores/useAdminPermissionStore';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
@@ -135,6 +136,20 @@ beforeEach(() => {
     error_code: '', error_message: '', created_at: '2026-09-18T02:00:00Z',
   }]);
   mocks.navigate.mockReset();
+  // 权限语义收紧（Architecture 2.0 §10）：identity 未加载时不再默认放行，
+  // 测试必须显式给出一个有目录/同步/资源读取权限的管理员身份。
+  useAdminPermissionStore.setState({
+    identity: {
+      can_access_console: true,
+      is_super_admin: false,
+      roles: [],
+      permissions: [
+        { id: 1, code: 'directory.read', category: '', name: '', description: '', created_at: '' },
+        { id: 2, code: 'directory.sync.read', category: '', name: '', description: '', created_at: '' },
+        { id: 3, code: 'resource.agent.read', category: '', name: '', description: '', created_at: '' },
+      ],
+    },
+  });
 });
 
 describe('MobileEnterpriseHome (P2-9)', () => {

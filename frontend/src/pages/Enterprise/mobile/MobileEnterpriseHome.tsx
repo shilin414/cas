@@ -29,9 +29,10 @@ export default function MobileEnterpriseHome() {
   const [error, setError] = useState(false);
   const identity = useAdminPermissionStore((state) => state.identity);
   const permissionCodes = new Set(identity?.permissions.map((item) => item.code) ?? []);
-  const sections = identity ? ENTERPRISE_SECTIONS.map((section) => ({ ...section, items: section.items.filter((item) => identity.is_super_admin || (item.requiredAnyPermissions ? item.requiredAnyPermissions.some((code) => permissionCodes.has(code)) : permissionCodes.has(item.requiredPermission))) })).filter((section) => section.items.length > 0) : ENTERPRISE_SECTIONS;
-  const canDirectory = identity === null || Boolean(identity?.is_super_admin || permissionCodes.has('directory.read'));
-  const canSync = identity === null || Boolean(identity?.is_super_admin || permissionCodes.has('directory.sync.read'));
+  // 权限未加载（identity null）时不显示任何菜单项，而不是默认全部允许。
+  const sections = identity ? ENTERPRISE_SECTIONS.map((section) => ({ ...section, items: section.items.filter((item) => identity.is_super_admin || (item.requiredAnyPermissions ? item.requiredAnyPermissions.some((code) => permissionCodes.has(code)) : permissionCodes.has(item.requiredPermission))) })).filter((section) => section.items.length > 0) : [];
+  const canDirectory = Boolean(identity && (identity.is_super_admin || permissionCodes.has('directory.read')));
+  const canSync = Boolean(identity && (identity.is_super_admin || permissionCodes.has('directory.sync.read')));
 
   // 概览加载失败只影响概览本身（二次复审 P2-9）：给轻量错误提示 + 重试，
   // 菜单永远可用，不阻塞导航。

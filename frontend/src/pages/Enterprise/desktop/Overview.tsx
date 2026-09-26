@@ -6,9 +6,8 @@ import { enterpriseApi, type DirectoryStats, type SyncRun } from '../enterpriseA
 
 export default function Overview() {
   const identity = useAdminPermissionStore((state) => state.identity);
-  const codes = new Set(identity?.permissions.map((item) => item.code) ?? []);
-  const canDirectory = identity === null || identity.is_super_admin || codes.has('directory.read');
-  const canSync = identity === null || identity.is_super_admin || codes.has('directory.sync.read');
+  const canDirectory = useAdminPermissionStore((state) => state.can('directory.read'));
+  const canSync = useAdminPermissionStore((state) => state.can('directory.sync.read'));
   const [stats, setStats] = useState<DirectoryStats | null>(null);
   const [runs, setRuns] = useState<SyncRun[]>([]);
   const [error, setError] = useState(false);
