@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Button, Drawer } from 'antd';
 import {
@@ -13,6 +13,7 @@ import MobileWorkbenchDrawer from '@/workbench/shell/MobileWorkbenchDrawer';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useRunChatStore } from '@/stores/useRunChatStore';
 import { useWorkspaceBootstrapStore } from '@/stores/useWorkspaceBootstrapStore';
+import { useAppNavigation } from '@/router/useAppNavigation';
 import type { ShellChrome } from './useShellChrome';
 import { MobileHeaderProvider, useMobileHeaderState } from './mobileHeader';
 import './shell.css';
@@ -24,6 +25,7 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
   const bootstrapDirty = useWorkspaceBootstrapStore((state) => state.dirty);
   const navigate = useNavigate();
   const location = useLocation();
+  const navigation = useAppNavigation();
   const pageOverride = useMobileHeaderState();
   const mobile = { ...chrome.mobile, ...pageOverride };
   const mode = mobile.mode ?? 'workspace';
@@ -31,14 +33,26 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
   const showMenu = mobile.showMenu ?? !showBack;
   const showAgentSwitcher = mobile.showAgentSwitcher ?? true;
 
+  // Drawer 导航时序（Architecture 2.0 §21）：先记录目标并关抽屉，
+  // 等关闭动画真正结束（afterOpenChange(false)）再导航 —— 不用 setTimeout 猜。
+  const pendingNavigationRef = useRef<string | null>(null);
+  const pendingNavigationTypeRef = useRef<'root' | 'page'>('root');
+
   useEffect(() => { void loadBootstrap(); }, [loadBootstrap]);
   useEffect(() => {
     if (bootstrapDirty) void loadBootstrap(true);
   }, [bootstrapDirty, loadBootstrap]);
 
-  const go = (targetPath: string) => {
+  // 顶栏返回：应用内 PUSH 过 → POP；Direct Link → route meta parent/root replace。
+  const go = () => {
     setMobileNavOpen(false);
-    navigate(targetPath);
+    navigation.back();
+  };
+
+  const requestDrawerNavigation = (path: string, type: 'root' | 'page') => {
+    pendingNavigationRef.current = path;
+    pendingNavigationTypeRef.current = type;
+    setMobileNavOpen(false);
   };
 
   const handleNewTask = () => {
@@ -99,7 +113,7 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
               type="button"
               className="mobile-shell__icon-btn"
               aria-label="返回企业控制台"
-              onClick={() => go(mobile.backTo ?? '/enterprise')}
+              onClick={go}
             >
               <ArrowLeftOutlined />
             </button>
@@ -135,12 +149,24 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
         placement="left"
         open={mobileNavOpen}
         onClose={() => setMobileNavOpen(false)}
+        afterOpenChange={(open) => {
+          if (open) return;
+          const target = pendingNavigationRef.current;
+          if (!target) return;
+          pendingNavigationRef.current = null;
+          if (pendingNavigationTypeRef.current === 'root') navigation.switchRoot(target);
+          else navigation.pushPage(target);
+        }}
         width="82vw"
         title="小安工作助手"
         rootClassName="mobile-shell__drawer"
         styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
       >
-        <MobileWorkbenchDrawer close={() => setMobileNavOpen(false)} />
+        <MobileWorkbenchDrawer
+          onRootNavigate={(path) => requestDrawerNavigation(path, 'root')}
+          onPageNavigate={(path) => requestDrawerNavigation(path, 'page')}
+          close={() => setMobileNavOpen(false)}
+        />
       </Drawer>
     </div>
   );

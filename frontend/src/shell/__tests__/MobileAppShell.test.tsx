@@ -3,8 +3,10 @@
 import React, { act, useMemo, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
+  createMemoryRouter,
   MemoryRouter,
   Route,
+  RouterProvider,
   Routes,
   useLocation,
 } from 'react-router-dom';
@@ -23,18 +25,26 @@ vi.mock('antd', () => ({
   Button: ({ children, icon, onClick, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon?: React.ReactNode }) => (
     <button type="button" onClick={onClick} {...props}>{icon}{children}</button>
   ),
-  Drawer: ({ open, children, title, onClose }: {
+  Drawer: ({ open, children, title, onClose, afterOpenChange }: {
     open: boolean;
     children: React.ReactNode;
     title?: React.ReactNode;
     onClose: () => void;
-  }) => open ? (
-    <aside data-testid="drawer">
-      <div>{title}</div>
-      <button type="button" onClick={onClose}>关闭抽屉</button>
-      {children}
-    </aside>
-  ) : null,
+    afterOpenChange?: (open: boolean) => void;
+  }) => {
+    if (typeof afterOpenChange === 'function') {
+      // 真实 Drawer 在动画结束后回调；测试里同步通知关闭完成，导航在
+      // afterOpenChange(false) 之后才发生（Architecture 2.0 §21）。
+      (globalThis as unknown as { __drawerAfterOpenChange?: (open: boolean) => void }).__drawerAfterOpenChange = afterOpenChange;
+    }
+    return open ? (
+      <aside data-testid="drawer">
+        <div>{title}</div>
+        <button type="button" onClick={onClose}>关闭抽屉</button>
+        {children}
+      </aside>
+    ) : null;
+  },
 }));
 vi.mock('@/components/ConversationHistory/ConversationHistory', () => ({
   default: ({ onNewConversation }: { onNewConversation: () => void }) => (
@@ -77,27 +87,42 @@ function buttonByText(text: string): HTMLButtonElement {
   return button;
 }
 
+/** 关闭后驱动 Drawer 的 afterOpenChange（模拟动画结束）再断言导航。 */
+async function closeDrawerAndFlush() {
+  await act(async () => {
+    const hook = (globalThis as unknown as { __drawerAfterOpenChange?: (open: boolean) => void }).__drawerAfterOpenChange;
+    hook?.(false);
+  });
+}
+
+// jsdom 的 matchMedia 默认不匹配 → useIsMobile=false（桌面）。
+// 本文件全部场景是 Mobile Shell，统一 stub 成移动端（Commit 05 Root Replace）。
+(globalThis as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({
+  matches: true, media: query, onchange: null,
+  addListener() {}, removeListener() {},
+  addEventListener() {}, removeEventListener() {},
+  dispatchEvent: () => false,
+});
+
 async function mountShell(initialPath: string) {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
   roots.push({ host, root });
+  // data router 挂载（useAppNavigation/useRouteMeta 依赖 useMatches）。
+  const router = createMemoryRouter([
+    {
+      path: '*',
+      element: (
+        <>
+          <MobileAppShell chrome={{ hideHeader: false, hideSidebar: false, padded: false }} />
+          <LocationProbe />
+        </>
+      ),
+    },
+  ], { initialEntries: [initialPath] });
   await act(async () => {
-    root.render(
-      <MemoryRouter initialEntries={[initialPath]}>
-        <Routes>
-          <Route
-            path="*"
-            element={(
-              <>
-                <MobileAppShell chrome={{ hideHeader: false, hideSidebar: false, padded: false }} />
-                <LocationProbe />
-              </>
-            )}
-          />
-        </Routes>
-      </MemoryRouter>,
-    );
+    root.render(<RouterProvider router={router} />);
   });
 }
 
@@ -206,8 +231,50 @@ describe('MobileAppShell navigation regression', () => {
     expect(home.querySelector('.mobile-shell__nav-icon')).toBeTruthy();
 
     await act(async () => buttonByText('应用').click());
+    // 点击后抽屉立即开始关闭；导航发生在动画结束（afterOpenChange false）后。
+    expect(document.querySelector('[data-testid="location"]')?.textContent).toBe('/chat/main-agent');
+    await closeDrawerAndFlush();
     expect(document.querySelector('[data-testid="drawer"]')).toBeNull();
     expect(document.querySelector('[data-testid="location"]')?.textContent).toBe('/apps');
+  });
+
+  it('mobile root navigation replaces browser history instead of stacking entries (Commit 05)', async () => {
+    // MemoryRouter 起始为 POP；root 切换必须 REPLACE —— / → /agents → /apps
+    // 不形成连续返回栈。外壳通过 data router 挂载（useMatches 需要）。
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    roots.push({ host, root });
+    const router = createMemoryRouter([
+      {
+        path: '*',
+        element: (
+          <>
+            <MobileAppShell chrome={{ hideHeader: false, hideSidebar: false, padded: false }} />
+            <LocationProbe />
+          </>
+        ),
+      },
+    ], { initialEntries: ['/'] });
+    await act(async () => {
+      root.render(<RouterProvider router={router} />);
+    });
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[aria-label="打开导航"]')!.click();
+    });
+    await act(async () => buttonByText('应用').click());
+    await closeDrawerAndFlush();
+    expect(router.state.location.pathname).toBe('/apps');
+    expect(router.state.historyAction).toBe('REPLACE');
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[aria-label="打开导航"]')!.click();
+    });
+    await act(async () => buttonByText('自动化').click());
+    await closeDrawerAndFlush();
+    expect(router.state.location.pathname).toBe('/schedules');
+    expect(router.state.historyAction).toBe('REPLACE');
   });
 
   it('returns to the mobile home route when 新任务 is clicked from a chat', async () => {
@@ -288,16 +355,15 @@ async function mountShellWithChrome(
   document.body.appendChild(host);
   const root = createRoot(host);
   roots.push({ host, root });
+  const router = createMemoryRouter([
+    {
+      path: '*',
+      element: <MobileAppShell chrome={chrome as never} />,
+      children: [{ path: '*', element: child }],
+    },
+  ], { initialEntries: [initialPath] });
   await act(async () => {
-    root.render(
-      <MemoryRouter initialEntries={[initialPath]}>
-        <Routes>
-          <Route path="*" element={<MobileAppShell chrome={chrome as never} />}>
-            <Route path="*" element={child} />
-          </Route>
-        </Routes>
-      </MemoryRouter>,
-    );
+    root.render(<RouterProvider router={router} />);
   });
 }
 
@@ -327,18 +393,49 @@ describe('MobileAppShell route-aware header', () => {
   });
 
   it('detail mode backs to the console root instead of history (§5 企业二级页面)', async () => {
-    await mountShellWithChrome({
-      hideHeader: false, hideSidebar: false, padded: true,
-      mobile: { mode: 'console', title: '企业控制台' },
-    }, <DetailProbe />, '/enterprise/resources/agents');
+    // Direct Link 进入企业二级页：route meta parent = /enterprise，
+    // 顶栏返回必须 replace 回父页面，而不是 PUSH 新的 /enterprise。
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    roots.push({ host, root });
+    const router = createMemoryRouter([
+      {
+        path: '/enterprise',
+        element: <output data-testid="location">/enterprise</output>,
+      },
+      {
+        path: '/enterprise/resources/agents',
+        element: (
+          <MobileAppShell chrome={{ hideHeader: false, hideSidebar: false, padded: true, mobile: { mode: 'console', title: '企业控制台' } }} />
+        ),
+        handle: {
+          app: {
+            id: 'enterprise-resource-agents',
+            level: 'detail',
+            root: '/enterprise',
+            parent: '/enterprise',
+            mobile: { mode: 'detail', title: '智能体管理' },
+          },
+        },
+        children: [
+          { index: true, element: <DetailProbe /> },
+        ],
+      },
+    ], { initialEntries: ['/enterprise/resources/agents'] });
+    await act(async () => {
+      root.render(<RouterProvider router={router} />);
+    });
+    // DetailProbe 的 header override 经 effect 注册，等一帧生效。
+    await act(async () => { await Promise.resolve(); });
 
     expect(document.querySelector('.mobile-shell__title')?.textContent)
       .toBe('智能体管理');
     const back = document.querySelector<HTMLButtonElement>('[aria-label="返回企业控制台"]');
     expect(back).toBeTruthy();
     await act(async () => back!.click());
-    expect(document.querySelector('[data-testid="location"]')?.textContent)
-      .toBe('/enterprise');
+    expect(router.state.location.pathname).toBe('/enterprise');
+    expect(router.state.historyAction).toBe('REPLACE');
   });
 
   it('schedules create action fires the page-bound onAction (§5 自动化 ＋)', async () => {

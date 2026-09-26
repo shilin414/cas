@@ -165,8 +165,14 @@ describe('Workbench application route mapping', () => {
     await unmount(root, host);
   });
 
-  it('uses renderer_key=chat and closes the mobile drawer before navigation', async () => {
-    const { host, root } = await mount(<MobileWorkbenchDrawer close={mocks.close} />);
+  it('uses renderer_key=chat and pushes a page route from the mobile drawer', async () => {
+    const { host, root } = await mount(
+      <MobileWorkbenchDrawer
+        onRootNavigate={(path) => { mocks.close(); mocks.navigate(path); }}
+        onPageNavigate={(path) => { mocks.close(); mocks.navigate(path); }}
+        close={mocks.close}
+      />,
+    );
 
     clickButton(host, mocks.rendererChat.name);
     expect(mocks.close).toHaveBeenCalledTimes(1);

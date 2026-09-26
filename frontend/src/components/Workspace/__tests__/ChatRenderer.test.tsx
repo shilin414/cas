@@ -3,8 +3,10 @@ import React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import {
+  createMemoryRouter,
   MemoryRouter,
   Route,
+  RouterProvider,
   Routes,
   useLocation,
 } from 'react-router-dom';
@@ -124,13 +126,16 @@ it('mobile shell and chat renderer do not race the return-home navigation', asyn
   useWorkspaceStore.getState().openApplication(application.id);
   const host=document.createElement('div');document.body.appendChild(host);
   const root=createRoot(host);roots.push(root);
-  await act(async()=>root.render(<MemoryRouter initialEntries={['/chat/finance-agent?conversation=123']}>
-    <LocationProbe />
-    <Routes><Route element={<MobileAppShell chrome={{hideHeader:false,hideSidebar:false,padded:false,mobile:{showAgentSwitcher:false}}} />}>
-      <Route path="/chat/:applicationSlug" element={<ChatRenderer application={application} />} />
-      <Route path="/" element={<HomeWorkspace />} />
-    </Route></Routes>
-  </MemoryRouter>));
+  // data router（useAppNavigation → useMatches 需要）。
+  const router=createMemoryRouter([{
+    path:'/',
+    element:(<><LocationProbe /><MobileAppShell chrome={{hideHeader:false,hideSidebar:false,padded:false,mobile:{showAgentSwitcher:false}}} /></>),
+    children:[
+      {path:'chat/:applicationSlug',element:<ChatRenderer application={application} />},
+      {index:true,element:<HomeWorkspace />},
+    ],
+  }],{initialEntries:['/chat/finance-agent?conversation=123']});
+  await act(async()=>root.render(<RouterProvider router={router} />));
   await act(async()=>(host.querySelector('.mobile-shell__task-btn') as HTMLButtonElement).click());
   expect(host.querySelector('[data-testid="location"]')?.textContent).toBe('/');
   expect(host.textContent).toContain('chat panel 财务智能体');
