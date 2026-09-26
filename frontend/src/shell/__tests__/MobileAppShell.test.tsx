@@ -461,15 +461,17 @@ describe('MobileAppShell route-aware header', () => {
   });
 
   it('merges nested header layers instead of clobbering (企业资源页 ＋)', async () => {
+    // Commit 06 起：静态 mode/title 由 Route Meta 决定；动态层只覆盖 action。
+    // 无 meta 时 chrome 静态值保持；这里验证页面层 action 与 chrome 层合并
+    // （不 clobber）—— mode/title 的 meta 驱动由 detail-mode 测试单独覆盖。
     await mountShellWithChrome({
       hideHeader: false, hideSidebar: false, padded: true,
       mobile: { mode: 'console', title: '企业控制台' },
     }, <EnterpriseResourceProbe />, '/enterprise/resources/agents');
 
-    // Detail layer from the console shell…
+    // chrome 静态 title 保留（detail 标题此后由 enterprise 子路由 meta 提供）。
     expect(document.querySelector('.mobile-shell__title')?.textContent)
-      .toBe('智能体管理');
-    expect(document.querySelector('[aria-label="返回企业控制台"]')).toBeTruthy();
+      .toBe('企业控制台');
     // …AND the create action from the page inside it.
     const create = document.querySelector<HTMLButtonElement>('[aria-label="新建"]');
     expect(create).toBeTruthy();

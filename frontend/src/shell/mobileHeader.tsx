@@ -138,3 +138,55 @@ export function useMobileHeaderState() {
     return merged;
   }, [layers]);
 }
+
+/**
+ * useMobileHeaderAction — 页面绑定顶栏 action 的推荐 API（Architecture 2.0
+ * §27）。静态部分（mode/title/showBack）由 Route Meta 决定；动态层只允许
+ * 覆盖 action。旧 useMobileHeader 仍兼容存量页面，迁移完成后收窄。
+ */
+export function useMobileHeaderAction(options: {
+  action?: MobileHeaderAction;
+  onAction?: () => void;
+} | null) {
+  useMobileHeader(options);
+}
+
+// ── 页面内部 back override（§28） ─────────────────────────────────────
+
+type BackOverride = (() => void) | null;
+
+const MobileBackOverrideContext = createContext<{ backOverride: BackOverride; setBackOverride: (value: BackOverride) => void }>({
+  backOverride: null,
+  setBackOverride: () => {},
+});
+
+export function MobileBackOverrideProvider({ children }: { children: React.ReactNode }) {
+  const [backOverride, setBackOverride] = useState<BackOverride>(null);
+  const value = useMemo(() => ({ backOverride, setBackOverride }), [backOverride]);
+  return (
+    <MobileBackOverrideContext.Provider value={value}>
+      {children}
+    </MobileBackOverrideContext.Provider>
+  );
+}
+
+/**
+ * 页面内部多 step（如自动化编辑器 compose→agent→trigger）接管顶栏返回：
+ * 只接受 onBack callback，绝不接受 backTo URL —— 页面不得重新拥有路由父子关系。
+ */
+export function useMobileBackOverride({ active, onBack }: { active: boolean; onBack: () => void }) {
+  const { setBackOverride } = useContext(MobileBackOverrideContext);
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
+
+  useEffect(() => {
+    if (!active) return undefined;
+    setBackOverride(() => onBackRef.current());
+    return () => setBackOverride(null);
+  }, [active, setBackOverride]);
+}
+
+/** Shell 读取当前是否有人接管了返回。 */
+export function useBackOverrideState(): BackOverride {
+  return useContext(MobileBackOverrideContext).backOverride;
+}

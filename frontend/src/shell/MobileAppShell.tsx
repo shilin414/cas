@@ -14,8 +14,9 @@ import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import { useRunChatStore } from '@/stores/useRunChatStore';
 import { useWorkspaceBootstrapStore } from '@/stores/useWorkspaceBootstrapStore';
 import { useAppNavigation } from '@/router/useAppNavigation';
+import { useRouteMeta } from '@/router/useRouteMeta';
 import type { ShellChrome } from './useShellChrome';
-import { MobileHeaderProvider, useMobileHeaderState } from './mobileHeader';
+import { MobileHeaderProvider, MobileBackOverrideProvider, useMobileHeaderState, useBackOverrideState } from './mobileHeader';
 import './shell.css';
 
 const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
@@ -26,10 +27,18 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const navigation = useAppNavigation();
+  const routeMeta = useRouteMeta();
   const pageOverride = useMobileHeaderState();
-  const mobile = { ...chrome.mobile, ...pageOverride };
+  const backOverride = useBackOverrideState();
+  // 静态 Header 由 Route Meta 决定；Dynamic layer 只允许覆盖 action（§26）。
+  const meta = routeMeta?.mobile;
+  const mobile = {
+    ...chrome.mobile,
+    ...(meta ?? {}),
+    action: pageOverride?.action ?? meta?.action ?? chrome.mobile?.action,
+  };
   const mode = mobile.mode ?? 'workspace';
-  const showBack = mobile.showBack ?? mode === 'detail';
+  const showBack = meta ? meta.mode === 'detail' : mobile.showBack ?? mode === 'detail';
   const showMenu = mobile.showMenu ?? !showBack;
   const showAgentSwitcher = mobile.showAgentSwitcher ?? true;
 
@@ -43,9 +52,11 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
     if (bootstrapDirty) void loadBootstrap(true);
   }, [bootstrapDirty, loadBootstrap]);
 
-  // 顶栏返回：应用内 PUSH 过 → POP；Direct Link → route meta parent/root replace。
+  // 顶栏返回：页面内部 step override 优先；否则 navigation.back()
+  // （应用内 PUSH 过 → POP；Direct Link → route meta parent/root replace）。
   const go = () => {
     setMobileNavOpen(false);
+    if (backOverride) { backOverride(); return; }
     navigation.back();
   };
 
@@ -174,7 +185,9 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
 
 const MobileAppShell: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => (
   <MobileHeaderProvider>
-    <MobileShellContent chrome={chrome} />
+    <MobileBackOverrideProvider>
+      <MobileShellContent chrome={chrome} />
+    </MobileBackOverrideProvider>
   </MobileHeaderProvider>
 );
 
