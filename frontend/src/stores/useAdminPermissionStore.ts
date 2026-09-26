@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { enterpriseApi, type AdminMe } from '@/pages/Enterprise/enterpriseApi';
 import { captureSessionGeneration, registerSessionReset, sessionStillCurrent } from '@/stores/resetSessionState';
+import { subscribeAdminPermissionInvalidated } from '@/services/adminPermissionEvents';
 import type { PermissionLoadStatus } from '@/router/permissionDecision';
 
 interface AdminPermissionState {
@@ -77,3 +78,10 @@ export const adminPermissionStatus = () => useAdminPermissionStore.getState().st
 export const __resolveStatus = toStatus;
 
 registerSessionReset(() => useAdminPermissionStore.getState().clear());
+
+// 在线撤权（Architecture 2.0 §92）：权威 /v2/admin/** 403 → invalidate。
+// RoutePermissionBoundary 看到 idle 会重新 ensureLoaded；新的（更小的）
+// 权限集决定页面 403 —— 旧页面不会继续保留。
+subscribeAdminPermissionInvalidated(() => {
+  useAdminPermissionStore.getState().invalidate();
+});

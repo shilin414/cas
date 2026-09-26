@@ -3,6 +3,7 @@ import axios from 'axios';
 import { message } from 'antd';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { captureSessionLoginReturnTo, navigateToSessionLogin } from '@/services/authRedirect';
+import { emitAdminPermissionInvalidated, isAdminAuthorityPath } from '@/services/adminPermissionEvents';
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
@@ -131,6 +132,12 @@ axiosInstance.interceptors.response.use(
     if (error.response && !silentError) {
       switch (status) {
         case 403:
+          // 权威 Admin 端点的 403 = 在线撤权信号（Architecture 2.0 §92）：
+          // emit 让 store invalidate；RouteBoundary 重新 ensureLoaded 后
+          // 真实权限决定 403 页面。/app/* 的 ACL 403 不在此列（§93）。
+          if (isAdminAuthorityPath(originalRequest?.url)) {
+            emitAdminPermissionInvalidated({ url: originalRequest?.url ?? '' });
+          }
           message.error('拒绝访问');
           break;
         case 404:
