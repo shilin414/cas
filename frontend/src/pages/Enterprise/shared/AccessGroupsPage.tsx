@@ -15,7 +15,7 @@ export function mergeDepartmentGrants(ids: number[], current: DepartmentGrant[],
 
 export default function AccessGroupsPage() {
   const isMobile = useIsMobile();
-  const canManage = useAdminPermissionStore((state) => Boolean(state.identity === null || state.identity?.is_super_admin || state.identity?.permissions.some((item) => item.code === 'access.group.manage')));
+  const canManage = useAdminPermissionStore((state) => state.can('access.group.manage'));
   const [groups, setGroups] = useState<AccessGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);

@@ -6,10 +6,10 @@ import { useAdminPermissionStore } from '@/stores/useAdminPermissionStore';
 import { groupAdminPermissions } from '../permissionCatalog';
 
 export default function AdminsPage() {
-  const canReadUsers = useAdminPermissionStore((state) => Boolean(state.identity === null || state.identity?.is_super_admin || state.identity?.permissions.some((item) => item.code === 'admin.user.read')));
-  const canReadRoles = useAdminPermissionStore((state) => Boolean(state.identity === null || state.identity?.is_super_admin || state.identity?.permissions.some((item) => item.code === 'admin.role.read')));
-  const canManageUsers = useAdminPermissionStore((state) => Boolean(state.identity === null || state.identity?.is_super_admin || state.identity?.permissions.some((item) => item.code === 'admin.user.manage')));
-  const canManageRoles = useAdminPermissionStore((state) => Boolean(state.identity === null || state.identity?.is_super_admin || state.identity?.permissions.some((item) => item.code === 'admin.role.manage')));
+  const canReadUsers = useAdminPermissionStore((state) => state.can('admin.user.read'));
+  const canReadRoles = useAdminPermissionStore((state) => state.can('admin.role.read'));
+  const canManageUsers = useAdminPermissionStore((state) => state.can('admin.user.manage'));
+  const canManageRoles = useAdminPermissionStore((state) => state.can('admin.role.manage'));
   const [roles, setRoles] = useState<AdminRole[]>([]);
   const [permissions, setPermissions] = useState<AdminPermission[]>([]);
   const [admins, setAdmins] = useState<Administrator[]>([]);

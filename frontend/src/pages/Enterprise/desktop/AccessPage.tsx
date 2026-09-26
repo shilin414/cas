@@ -49,7 +49,7 @@ interface AccessTarget {
 
 export default function AccessPage({ kind }: { kind: "chat" | "fixed" }) {
   const location = useLocation();
-  const canManage = useAdminPermissionStore((state) => Boolean(state.identity === null || state.identity?.is_super_admin || state.identity?.permissions.some((item) => item.code === "access.policy.manage")));
+  const canManage = useAdminPermissionStore((state) => state.can("access.policy.manage"));
   const initial = Number(new URLSearchParams(location.search).get("app") || 0);
   const [q, setQ] = useState("");
   const {

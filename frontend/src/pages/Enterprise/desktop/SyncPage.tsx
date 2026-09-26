@@ -250,11 +250,7 @@ function MetricTags({ job }: { job: SyncJobView }) {
 }
 
 export default function SyncPage() {
-  const canManage = useAdminPermissionStore((state) => Boolean(
-    state.identity === null
-    || state.identity?.is_super_admin
-    || state.identity?.permissions.some((item) => item.code === "directory.sync.manage"),
-  ));
+  const canManage = useAdminPermissionStore((state) => state.can("directory.sync.manage"));
   const [targets, setTargets] = useState<SyncTargetView[]>([]);
   const [jobs, setJobs] = useState<SyncJobView[]>([]);
   const [targetsError, setTargetsError] = useState<string | null>(null);

@@ -54,8 +54,8 @@ const KIND_LABELS: Record<string, string> = {
 
 export default function MobileResourcePage({ kind }: { kind: 'chat' | 'fixed' }) {
   const navigate = useNavigate();
-  const canManage = useAdminPermissionStore((state) => Boolean(state.identity === null || state.identity?.is_super_admin || state.identity?.permissions.some((item) => item.code === (kind === 'chat' ? 'resource.agent.manage' : 'resource.app.manage'))));
-  const canManageAccess = useAdminPermissionStore((state) => Boolean(state.identity === null || state.identity?.is_super_admin || state.identity?.permissions.some((item) => item.code === 'access.policy.manage')));
+  const canManage = useAdminPermissionStore((state) => state.can(kind === 'chat' ? 'resource.agent.manage' : 'resource.app.manage'));
+  const canManageAccess = useAdminPermissionStore((state) => state.can('access.policy.manage'));
   const [q, setQ] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);

@@ -2,6 +2,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useAdminPermissionStore } from '@/stores/useAdminPermissionStore';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 
@@ -134,7 +135,22 @@ function click(element: Element) {
   return act(async () => { element.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
 }
 
+// 权限语义收紧（Architecture 2.0 §10/§48）：identity 未加载时不再默认放行
+// mutation；需要 manage 权限的用例必须显式注入 identity。
+const grantIdentity = (codes: string[]) => {
+  useAdminPermissionStore.setState({
+    identity: {
+      can_access_console: true,
+      is_super_admin: false,
+      roles: [],
+      permissions: codes.map((code, index) => ({ id: index, code, category: '', name: code, description: '', created_at: '' })),
+    },
+    status: 'ready',
+  });
+};
+
 beforeEach(() => {
+  grantIdentity(['directory.sync.read', 'directory.sync.manage']);
   mocks.loadSyncTargets.mockReset().mockResolvedValue(TARGETS);
   mocks.loadSyncJobs.mockReset().mockResolvedValue([]);
   mocks.saveSyncTargetConfig.mockReset().mockImplementation(async (code: string) => CONFIG(code, 2));

@@ -34,7 +34,7 @@ export interface MobilePermissionEditorProps {
 export default function MobilePermissionEditor({
   open, application, onClose,
 }: MobilePermissionEditorProps) {
-  const canManage = useAdminPermissionStore((state) => Boolean(state.identity === null || state.identity?.is_super_admin || state.identity?.permissions.some((item) => item.code === 'access.policy.manage')));
+  const canManage = useAdminPermissionStore((state) => state.can('access.policy.manage'));
   const [depPickerOpen, setDepPickerOpen] = useState(false);
   const [userPickerOpen, setUserPickerOpen] = useState(false);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
