@@ -15,7 +15,6 @@ import { useRunChatStore } from '@/stores/useRunChatStore';
 import { useWorkspaceBootstrapStore } from '@/stores/useWorkspaceBootstrapStore';
 import type { ShellChrome } from './useShellChrome';
 import { MobileHeaderProvider, useMobileHeaderState } from './mobileHeader';
-import MobileDrawerSwipeSurface from './MobileDrawerSwipeSurface';
 import './shell.css';
 
 const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
@@ -140,11 +139,6 @@ const MobileShellContent: React.FC<{ chrome: ShellChrome }> = ({ chrome }) => {
         title="小安工作助手"
         rootClassName="mobile-shell__drawer"
         styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
-        drawerRender={(node) => (
-          <MobileDrawerSwipeSurface open={mobileNavOpen} onDismiss={() => setMobileNavOpen(false)}>
-            {node}
-          </MobileDrawerSwipeSurface>
-        )}
       >
         <MobileWorkbenchDrawer close={() => setMobileNavOpen(false)} />
       </Drawer>

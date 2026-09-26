@@ -110,13 +110,6 @@
   padding-top: calc(16px + env(safe-area-inset-top));
 }
 
-.mobile-shell__swipe-surface {
-  width: 100%;
-  height: 100%;
-  touch-action: pan-y;
-  will-change: transform;
-}
-
 .mobile-shell__nav {
   display: flex;
   flex-direction: column;
