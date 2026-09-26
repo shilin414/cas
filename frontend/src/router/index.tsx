@@ -4,6 +4,7 @@ import { AuthLayout } from '@/layouts';
 import AppShell from '@/shell/AppShell';
 import WorkspaceHost from '@/components/Workspace/WorkspaceHost';
 import { AdminRoute, EnterpriseRoute, ProtectedRoute, PublicRoute } from './guards';
+import { enterprisePermission } from './permissions';
 import LegacyAppRunRedirect from './LegacyAppRunRedirect';
 
 // Console pages (application management) are route-level lazy (三次复审
@@ -60,8 +61,22 @@ const fullscreenConsole = { shell: { hideSidebar: true, hideHeader: true } };
 // switcher for a page title; Schedules gains a create action wired by the
 // page itself via useMobileHeader. Enterprise sub-pages override the title
 // dynamically (mode: 'detail') from EnterprisePage's mobile branch.
+//
+// Architecture 2.0 (§12/§14): every top-level route also declares handle.app
+// (route meta) alongside the legacy handle.shell — useShellChrome keeps
+// reading `shell`, useRouteMeta reads `app` — until all routes are migrated.
 const homeWorkspaceHandle = {
   shell: {
+    mobile: {
+      mode: 'workspace' as const,
+      action: 'new-task' as const,
+      showAgentSwitcher: false,
+    },
+  },
+  app: {
+    id: 'home',
+    level: 'root' as const,
+    root: '/',
     mobile: {
       mode: 'workspace' as const,
       action: 'new-task' as const,
@@ -72,34 +87,51 @@ const homeWorkspaceHandle = {
 
 const fixedWorkspaceHandle = {
   shell: { mobile: { mode: 'page' as const, title: '应用', action: 'none' as const } },
+  app: { id: 'workspace-fixed', level: 'root' as const, root: '/', mobile: { mode: 'page' as const, title: '应用' } },
 };
 const taskPageHandle = {
   shell: {
     padded: false,
     mobile: { mode: 'page' as const, title: '任务', action: 'none' as const },
   },
+  app: { id: 'tasks', level: 'root' as const, root: '/tasks', mobile: { mode: 'page' as const, title: '任务' } },
 };
 const agentsPageHandle = {
   shell: {
     padded: true,
     mobile: { mode: 'page' as const, title: '智能体中心' },
   },
+  app: { id: 'agents', level: 'root' as const, root: '/agents', mobile: { mode: 'page' as const, title: '智能体中心' } },
 };
 const appsPageHandle = {
   shell: {
     padded: true,
     mobile: { mode: 'page' as const, title: '应用中心' },
   },
+  app: { id: 'apps', level: 'root' as const, root: '/apps', mobile: { mode: 'page' as const, title: '应用中心' } },
 };
 const schedulesPageHandle = {
   shell: {
     padded: true,
     mobile: { mode: 'page' as const, title: '自动化', action: 'create' as const },
   },
+  app: {
+    id: 'schedules',
+    level: 'root' as const,
+    root: '/schedules',
+    mobile: { mode: 'page' as const, title: '自动化', action: 'create' as const },
+  },
 };
 const enterprisePageHandle = {
   shell: {
     padded: false,
+    mobile: { mode: 'console' as const, title: '企业控制台' },
+  },
+  app: {
+    id: 'enterprise',
+    level: 'root' as const,
+    root: '/enterprise',
+    permission: enterprisePermission(),
     mobile: { mode: 'console' as const, title: '企业控制台' },
   },
 };
