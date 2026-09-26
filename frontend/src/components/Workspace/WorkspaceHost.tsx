@@ -5,11 +5,16 @@
  * a management page may have cached a disabled/private/unbound application.
  * Only the result of this entry's forced consume `/resolve` may mount the
  * chat/page/workflow surface.
+ *
+ * POP 快速恢复（Architecture 2.0 §70–§74）：路由变化时先查 consume-validated
+ * 快照 —— 存在则同步显示（返回不阻塞），无论有无快照都在后台强制 resolve；
+ * revalidate 成功更新/404，权限失败则不再沿用旧页面；网络失败且存在
+ * fresh consume 快照时暂时继续显示，否则 Error + Retry。
  */
 import React, { useEffect, useState } from 'react';
 import { Button, Empty, Spin } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useApplicationEntityStore } from '@/stores/useApplicationEntityStore';
+import { useApplicationEntityStore, DEFAULT_CONSUME_TTL_MS } from '@/stores/useApplicationEntityStore';
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore';
 import type { V2Application } from '@/services/runApi';
 import ChatRenderer from './ChatRenderer';
@@ -21,6 +26,17 @@ export type WorkspaceKind = 'home' | 'chat' | 'page' | 'workflow';
 
 interface Props {
   kind?: WorkspaceKind;
+}
+
+/** consume-validated 快照：仅 consume 端点完整响应写入（§71）。 */
+function consumeValidatedSnapshot(slug: string): V2Application | null {
+  const { bySlug, validatedAtById } = useApplicationEntityStore.getState();
+  const cached = bySlug[slug];
+  if (!cached) return null;
+  const validatedAt = validatedAtById[cached.id];
+  // 过旧的快照不能作为同步 admitted 起点（宁 loading 不旧页面）。
+  if (validatedAt == null || Date.now() - validatedAt > DEFAULT_CONSUME_TTL_MS) return null;
+  return cached;
 }
 
 const WorkspaceHost: React.FC<Props> = ({ kind = 'home' }) => {
@@ -49,8 +65,11 @@ const WorkspaceHost: React.FC<Props> = ({ kind = 'home' }) => {
     let active = true;
     setActiveApplication(null);
     setResolvedSlug(applicationSlug);
-    setResolvedApplication(undefined);
     setResolveFailed(false);
+    // 同步预加载（§72）：consume-validated 快照存在 → 立即显示；
+    // 否则 undefined = loading（null 只能来自 resolve 的权威结论）。
+    const snapshot = consumeValidatedSnapshot(applicationSlug);
+    setResolvedApplication(snapshot ?? undefined);
     void ensureBySlug(applicationSlug, { maxAgeMs: 0, bypassBackoff: retryNonce > 0 })
       .then((application) => {
         if (!active) return;
@@ -58,6 +77,10 @@ const WorkspaceHost: React.FC<Props> = ({ kind = 'home' }) => {
       })
       .catch(() => {
         if (!active) return;
+        // §74：网络失败但进入路由时有 fresh consume 快照 → 暂时继续显示。
+        // 注意 ensureBySlug 失败路径会把实体从 store 移除（hideUntilRetry），
+        // 所以以进入路由那一刻的快照为准，而不是失败后再查。
+        if (snapshot) return;
         setResolveFailed(true);
       });
     return () => { active = false; };
