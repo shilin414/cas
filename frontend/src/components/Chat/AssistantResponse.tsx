@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { memo, useEffect, useId, useRef, useState } from 'react';
 import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
@@ -10,8 +10,14 @@ import type { ChatMessage } from '@/stores/useRunChatStore';
 import { MarkdownWithArtifacts } from './ArtifactMarkdown';
 import './AssistantResponse.css';
 
-/** Provider progress is not a final answer. Keep it inspectable, not prominent. */
-export default function AssistantResponse({ message }: { message: ChatMessage }) {
+/**
+ * memo()（Architecture 2.0 §76–§77）：流式期间每个 SSE delta 只替换
+ * conversation.messages 里的 streaming 项（store 层 `messages[idx] = message`，
+ * 其余元素保持原引用），所以 settled 历史消息不会因 delta 重新 render，
+ * 历史 markdown 不会重新 parse。该 identity 不变量由 useRunChatStore 的
+ * 更新路径保证；若 store 改为整表 map 重建，memo 将失效。
+ */
+const AssistantResponse = memo(function AssistantResponse({ message }: { message: ChatMessage }) {
   const { status, processText, retryNotice, content, artifacts } = message;
   const pending = status === 'streaming';
   const hasProcess = Boolean(processText?.trim());
@@ -90,4 +96,6 @@ export default function AssistantResponse({ message }: { message: ChatMessage })
       ) : null}
     </div>
   );
-}
+});
+
+export default AssistantResponse;
