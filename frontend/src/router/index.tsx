@@ -4,8 +4,13 @@ import { AuthLayout } from '@/layouts';
 import AppShell from '@/shell/AppShell';
 import WorkspaceHost from '@/components/Workspace/WorkspaceHost';
 import { AdminRoute, EnterpriseRoute, ProtectedRoute, PublicRoute } from './guards';
-import { anyPermission, enterprisePermission } from './permissions';
+import { enterprisePermission } from './permissions';
+import { ENTERPRISE_ROUTE_DEFINITIONS } from '@/pages/Enterprise/enterpriseRoutes';
 import LegacyAppRunRedirect from './LegacyAppRunRedirect';
+
+const ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY = Object.fromEntries(
+  ENTERPRISE_ROUTE_DEFINITIONS.map((definition) => [definition.key, definition]),
+);
 
 // Console pages (application management) are route-level lazy (三次复审
 // §55–§58): 首页 / Chat 首屏不再下载用户可能永远不会进入的管理页 ——
@@ -39,17 +44,8 @@ import FeishuCallbackPage from '@/pages/Auth/FeishuCallbackPage';
 // snapshotted messages for the token).
 import SharePage from '@/pages/Share/SharePage';
 
-const EnterprisePage = lazy(() => import('@/pages/Enterprise/EnterprisePage'));
 const EnterpriseOverviewRoute = lazy(() => import('@/pages/Enterprise/enterpriseRouteAdapters')
   .then((m) => ({ default: m.EnterpriseOverviewRoute })));
-
-// 过渡期 catch-all：未迁移的子页面继续走 EnterprisePage 内部 switch，
-// 迁移完成后删除（Architecture 2.0 §47 双保险阶段）。
-const enterpriseElementLegacy = (
-  <Suspense fallback={<div style={{ padding: 32 }}>正在加载企业控制台…</div>}>
-    <EnterpriseRoute><EnterprisePage /></EnterpriseRoute>
-  </Suspense>
-);
 
 // Enterprise 嵌套路由（Architecture 2.0 §32/§34）：URL 不变，页面由子路由
 // 渲染；每条子路由在 handle.app 声明权限与移动 Header 元数据，由
@@ -304,17 +300,21 @@ const router = createBrowserRouter([
               </Suspense>
             ),
           },
-          // 第一阶段（§34）：audit / providers 先迁移验证模式。
-          enterpriseChild(
-            { id: 'enterprise-audit', path: 'audit', key: 'audit', permission: anyPermission('audit.read'), mobileTitle: '审计日志' },
-            (m) => m.EnterpriseAuditRoute,
-          ),
-          enterpriseChild(
-            { id: 'enterprise-providers', path: 'providers', key: 'providers', permission: anyPermission('provider.read'), mobileTitle: 'Provider' },
-            (m) => m.EnterpriseProvidersRoute,
-          ),
-          // 其余子路由仍由 EnterprisePage 的内部 switch 处理（catch-all）。
-          { path: '*', element: enterpriseElementLegacy },
+          // 子路由全部由 ENTERPRISE_ROUTE_DEFINITIONS 派生（§46 Adapter）。
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['resources/agents'], (m) => m.EnterpriseAgentResourceRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['resources/apps'], (m) => m.EnterpriseAppResourceRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['access/agents'], (m) => m.EnterpriseAgentAccessRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['access/apps'], (m) => m.EnterpriseAppAccessRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['access/groups'], (m) => m.EnterpriseAccessGroupsRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['access/diagnosis'], (m) => m.EnterpriseAccessDiagnosisRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['admins'], (m) => m.EnterpriseAdminsRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['directory'], (m) => m.EnterpriseDirectoryRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['directory/sync'], (m) => m.EnterpriseSyncRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['ai-models'], (m) => m.EnterpriseAIModelsRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['operations'], (m) => m.EnterpriseOperationsRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['providers'], (m) => m.EnterpriseProvidersRoute),
+          enterpriseChild(ENTERPRISE_ROUTE_DEFINITIONS_BY_KEY['audit'], (m) => m.EnterpriseAuditRoute),
+          { path: '*', element: <Navigate to="/enterprise" replace /> },
         ],
       },
 
