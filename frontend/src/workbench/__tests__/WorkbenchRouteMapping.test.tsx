@@ -89,10 +89,16 @@ vi.mock('@/workbench/capability/useRecentCapabilities', () => ({
   useRecentCapabilities: () => mocks.recentCapabilities,
 }));
 vi.mock('@/workbench/capability/CapabilityPickerDialog', () => ({
-  default: ({ open, onSelect }: { open: boolean; onSelect: (item: any) => void }) => open ? (
+  default: ({ open, onSelect, afterOpenChange }: {
+    open: boolean;
+    onSelect: (item: any) => void;
+    afterOpenChange?: (open: boolean) => void;
+  }) => open ? (
     <div>
       <button type="button" onClick={() => onSelect(mocks.workflow)}>picker-workflow</button>
       <button type="button" onClick={() => onSelect(mocks.rendererChat)}>picker-renderer-chat</button>
+      {/* 模拟关闭动画结束（§69：导航发生在 afterOpenChange(false) 之后）。 */}
+      <button type="button" onClick={() => afterOpenChange?.(false)}>picker-closed</button>
     </div>
   ) : null,
 }));
@@ -147,10 +153,14 @@ describe('Workbench application route mapping', () => {
     clickButton(host, 'picker-workflow');
     expect(mocks.openApplication).toHaveBeenCalledWith(mocks.workflow.id);
     expect(mocks.close).toHaveBeenCalledTimes(1);
+    // 选中后导航尚未发生（等待关闭动画）。
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    clickButton(host, 'picker-closed');
     expect(mocks.navigate).toHaveBeenLastCalledWith('/workflow/monthly-report');
 
     clickButton(host, 'picker-renderer-chat');
     expect(mocks.openApplication).toHaveBeenCalledWith(mocks.rendererChat.id);
+    clickButton(host, 'picker-closed');
     expect(mocks.navigate).toHaveBeenLastCalledWith('/chat/legacy-chat');
 
     await unmount(root, host);
