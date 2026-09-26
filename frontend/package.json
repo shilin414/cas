@@ -17,7 +17,8 @@
     "ocr:prepare": "node scripts/prepare-ocr-resources.mjs",
     "predev": "npm run ocr:runtime",
     "prebuild": "npm run ocr:runtime && npm run ocr:prepare",
-    "test:ocr-deployment": "node --test scripts/ocr-deployment.test.mjs"
+    "test:ocr-deployment": "node --test scripts/ocr-deployment.test.mjs",
+    "check:navigation": "node scripts/check-navigation-boundaries.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",
