@@ -4,7 +4,7 @@ import { AuthLayout } from '@/layouts';
 import AppShell from '@/shell/AppShell';
 import WorkspaceHost from '@/components/Workspace/WorkspaceHost';
 import { AdminRoute, EnterpriseRoute, ProtectedRoute, PublicRoute } from './guards';
-import { enterprisePermission } from './permissions';
+import { anyPermission, enterprisePermission } from './permissions';
 import LegacyAppRunRedirect from './LegacyAppRunRedirect';
 
 // Console pages (application management) are route-level lazy (三次复审
@@ -40,12 +40,63 @@ import FeishuCallbackPage from '@/pages/Auth/FeishuCallbackPage';
 import SharePage from '@/pages/Share/SharePage';
 
 const EnterprisePage = lazy(() => import('@/pages/Enterprise/EnterprisePage'));
+const EnterpriseOverviewRoute = lazy(() => import('@/pages/Enterprise/enterpriseRouteAdapters')
+  .then((m) => ({ default: m.EnterpriseOverviewRoute })));
 
-const enterpriseElement = (
+// 过渡期 catch-all：未迁移的子页面继续走 EnterprisePage 内部 switch，
+// 迁移完成后删除（Architecture 2.0 §47 双保险阶段）。
+const enterpriseElementLegacy = (
   <Suspense fallback={<div style={{ padding: 32 }}>正在加载企业控制台…</div>}>
     <EnterpriseRoute><EnterprisePage /></EnterpriseRoute>
   </Suspense>
 );
+
+// Enterprise 嵌套路由（Architecture 2.0 §32/§34）：URL 不变，页面由子路由
+// 渲染；每条子路由在 handle.app 声明权限与移动 Header 元数据，由
+// RoutePermissionBoundary 统一执行 —— 不在每个 route JSX 手写 Guard。
+const EnterpriseRouteLayout = lazy(() => import('@/pages/Enterprise/EnterpriseRouteLayout'));
+// RoutePermissionBoundary 内部渲染 <Outlet/>，作为 layout route element 使用。
+const RoutePermissionBoundary = lazy(() => import('@/router/RoutePermissionBoundary')
+  .then((m) => ({ default: m.RoutePermissionBoundary })));
+const enterpriseAdapters = () => import('@/pages/Enterprise/enterpriseRouteAdapters');
+
+const enterpriseChild = (
+  definition: { id: string; path: string; key: string; permission: unknown; mobileTitle: string },
+  load: (m: Awaited<ReturnType<typeof enterpriseAdapters>>) => React.ComponentType,
+) => {
+  const Component = lazy(async () => {
+    const m = await enterpriseAdapters();
+    return { default: load(m) };
+  });
+  return {
+    path: definition.path,
+    element: (
+      <Suspense fallback={<div style={{ padding: 32 }}>正在加载…</div>}>
+        <RoutePermissionBoundary />
+      </Suspense>
+    ),
+    children: [
+      {
+        index: true,
+        element: (
+          <Suspense fallback={<div style={{ padding: 32 }}>正在加载…</div>}>
+            <Component />
+          </Suspense>
+        ),
+      },
+    ],
+    handle: {
+      app: {
+        id: definition.id,
+        level: 'detail' as const,
+        root: '/enterprise',
+        parent: '/enterprise',
+        permission: definition.permission as never,
+        mobile: { mode: 'detail' as const, title: definition.mobileTitle },
+      },
+    },
+  };
+};
 
 /** 次级 console 路由的懒加载壳：短 fallback，不打断布局。 */
 const lazyConsole = (node: ReactNode) => (
@@ -231,7 +282,41 @@ const router = createBrowserRouter([
         element: lazyConsole(<WorkspacePage />),
         handle: fullWidthConsole,
       },
-      { path: 'enterprise/*', element: enterpriseElement, handle: enterprisePageHandle },
+      {
+        path: 'enterprise',
+        element: (
+          <Suspense fallback={<div style={{ padding: 32 }}>正在加载企业控制台…</div>}>
+            <EnterpriseRoute>
+              <EnterpriseRouteLayout />
+            </EnterpriseRoute>
+          </Suspense>
+        ),
+        handle: {
+          shell: enterprisePageHandle.shell,
+          app: enterprisePageHandle.app,
+        },
+        children: [
+          {
+            index: true,
+            element: (
+              <Suspense fallback={<div style={{ padding: 32 }}>正在加载…</div>}>
+                <EnterpriseOverviewRoute />
+              </Suspense>
+            ),
+          },
+          // 第一阶段（§34）：audit / providers 先迁移验证模式。
+          enterpriseChild(
+            { id: 'enterprise-audit', path: 'audit', key: 'audit', permission: anyPermission('audit.read'), mobileTitle: '审计日志' },
+            (m) => m.EnterpriseAuditRoute,
+          ),
+          enterpriseChild(
+            { id: 'enterprise-providers', path: 'providers', key: 'providers', permission: anyPermission('provider.read'), mobileTitle: 'Provider' },
+            (m) => m.EnterpriseProvidersRoute,
+          ),
+          // 其余子路由仍由 EnterprisePage 的内部 switch 处理（catch-all）。
+          { path: '*', element: enterpriseElementLegacy },
+        ],
+      },
 
       { path: '*', element: <Navigate to="/" replace /> },
     ],
