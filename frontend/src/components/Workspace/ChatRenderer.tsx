@@ -22,7 +22,7 @@ import { useWorkspaceBootstrapStore } from '@/stores/useWorkspaceBootstrapStore'
 import { useWorkspaceStore, workspaceStateOf } from '@/stores/useWorkspaceStore';
 import type { V2Application } from '@/services/runApi';
 import ApplicationSwitcher from './ApplicationSwitcher';
-import { useMobileHeader } from '@/shell/mobileHeader';
+import { useMobileHeaderAction } from '@/shell/mobileHeader';
 
 interface Props {
   application: V2Application;
@@ -106,7 +106,7 @@ const ChatRenderer: React.FC<Props> = ({ application }) => {
     navigate('/', { state: { newTaskApplicationId: application.id } });
   }, [application.id, navigate, startNewConversation, setActiveConversation]);
   // Both headers must set returningHomeRef before the store's new-task tick.
-  useMobileHeader({ onAction: handleNewConversation });
+  useMobileHeaderAction({ onAction: handleNewConversation });
 
   // External "new conversation" while THIS workspace is already mounted:
   // navigating to the same /chat/:slug URL remounts nothing, so the store tick

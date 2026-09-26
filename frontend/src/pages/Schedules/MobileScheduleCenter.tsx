@@ -16,7 +16,7 @@ import {
   PlayCircleOutlined,
 } from '@ant-design/icons';
 import { useSchedules } from '@/hooks/useSchedules';
-import { useMobileHeader } from '@/shell/mobileHeader';
+import { useMobileHeaderAction } from '@/shell/mobileHeader';
 import { useAppNavigation } from '@/router/useAppNavigation';
 import type { Schedule, ScheduleStatusFilter } from '@/types/schedule';
 import { ScheduleStatusTag } from '@/components/Schedules/ScheduleStatusTag';
@@ -57,7 +57,7 @@ export function MobileScheduleCenter() {
   const openNew = useCallback(() => {
     navigation.pushPage('/schedules/new');
   }, [navigation]);
-  useMobileHeader({ onAction: openNew });
+  useMobileHeaderAction({ onAction: openNew });
 
   const confirmRemove = (s: Schedule) => {
     Modal.confirm({

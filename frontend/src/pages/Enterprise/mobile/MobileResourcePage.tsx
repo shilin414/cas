@@ -34,7 +34,7 @@ import {
   type ManagedAgent,
   type V2Application,
 } from '@/services/runApi';
-import { useMobileHeader } from '@/shell/mobileHeader';
+import { useMobileHeaderAction } from '@/shell/mobileHeader';
 import { pagePath } from '../enterpriseNav';
 import { reconcileDeletedApplication, reconcileManagedApplication } from '../reconcileManagedApplication';
 import {
@@ -92,7 +92,7 @@ export default function MobileResourcePage({ kind }: { kind: 'chat' | 'fixed' })
       setFixedOpen(true);
     }
   }, [kind, form]);
-  useMobileHeader(canManage ? { action: 'create', onAction: openNew } : {});
+  useMobileHeaderAction(canManage ? { action: 'create', onAction: openNew } : {});
 
   const openEdit = (app: V2Application) => {
     if (kind === 'chat') {

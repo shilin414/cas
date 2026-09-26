@@ -11,12 +11,11 @@ import type { MobileHeaderMode } from './useShellChrome';
 
 export type MobileHeaderAction = 'create' | 'search' | 'more' | 'none';
 
+/**
+ * 动态 Header 层唯一允许的形状（Architecture 2.0 §27/§86–§88）：
+ * 静态部分（mode/title/showBack）全部由 Route Meta 决定，动态层只覆盖 action。
+ */
 export interface MobileHeaderOverride {
-  mode?: MobileHeaderMode;
-  title?: string;
-  showMenu?: boolean;
-  showBack?: boolean;
-  backTo?: string;
   action?: MobileHeaderAction;
   onAction?: () => void;
 }
@@ -97,14 +96,12 @@ export function MobileHeaderProvider({ children }: { children: React.ReactNode }
  * the route handle's chrome.mobile, and an explicit `undefined` would erase
  * a handle-declared action/title instead of leaving it alone.
  */
-export function useMobileHeader(options: MobileHeaderOverride | null) {
+function registerMobileHeaderLayer(options: MobileHeaderOverride | null) {
   const context = useContext(MobileHeaderContext);
   const contextRef = useRef(context);
   contextRef.current = context;
   const idRef = useRef<LayerId | null>(null);
-  const {
-    mode, title, showMenu, showBack, backTo, action, onAction,
-  } = options ?? {};
+  const { action, onAction } = options ?? {};
 
   useEffect(() => {
     const ctx = contextRef.current;
@@ -113,11 +110,6 @@ export function useMobileHeader(options: MobileHeaderOverride | null) {
     const id = idRef.current;
 
     const next: MobileHeaderOverride = {};
-    if (mode !== undefined) next.mode = mode;
-    if (title !== undefined) next.title = title;
-    if (showMenu !== undefined) next.showMenu = showMenu;
-    if (showBack !== undefined) next.showBack = showBack;
-    if (backTo !== undefined) next.backTo = backTo;
     if (action !== undefined) next.action = action;
     if (onAction !== undefined) next.onAction = onAction;
 
@@ -125,7 +117,7 @@ export function useMobileHeader(options: MobileHeaderOverride | null) {
     return () => contextRef.current?.setLayer(id, null);
     // Deliberately only the semantic fields — see the doc comment above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, title, showMenu, showBack, backTo, action, onAction]);
+  }, [action, onAction]);
 }
 
 /** Field-wise merge of every registered layer (later layers win). */
@@ -140,15 +132,12 @@ export function useMobileHeaderState() {
 }
 
 /**
- * useMobileHeaderAction — 页面绑定顶栏 action 的推荐 API（Architecture 2.0
- * §27）。静态部分（mode/title/showBack）由 Route Meta 决定；动态层只允许
- * 覆盖 action。旧 useMobileHeader 仍兼容存量页面，迁移完成后收窄。
+ * useMobileHeaderAction — 页面绑定顶栏 action 的唯一 API（Architecture 2.0
+ * §27/§88：旧泛用 useMobileHeader 已删除）。静态部分（mode/title/showBack）
+ * 由 Route Meta 决定，动态层只允许覆盖 action。
  */
-export function useMobileHeaderAction(options: {
-  action?: MobileHeaderAction;
-  onAction?: () => void;
-} | null) {
-  useMobileHeader(options);
+export function useMobileHeaderAction(options: MobileHeaderOverride | null) {
+  registerMobileHeaderLayer(options);
 }
 
 // ── 页面内部 back override（§28） ─────────────────────────────────────

@@ -51,7 +51,7 @@ vi.mock('react-router-dom', () => ({
 }));
 
 vi.mock('@/shell/mobileHeader', () => ({
-  useMobileHeader: () => {},
+  useMobileHeaderAction: () => {},
 }));
 
 vi.mock('@/components/Agents/AgentEditorModal', () => ({

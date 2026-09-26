@@ -9,7 +9,6 @@ export interface MobileShellChrome {
   title?: string;
   showMenu?: boolean;
   showBack?: boolean;
-  backTo?: string;
   action?: MobileHeaderActionType;
   showAgentSwitcher?: boolean;
 }

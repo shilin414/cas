@@ -62,7 +62,7 @@ vi.mock('@/components/Theme', () => ({
 }));
 
 import MobileAppShell from '@/shell/MobileAppShell';
-import { useMobileHeader } from '@/shell/mobileHeader';
+import { useMobileHeaderAction } from '@/shell/mobileHeader';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useApplicationEntityStore } from '@/stores/useApplicationEntityStore';
 import type { V2Application } from '@/services/runApi';
@@ -308,41 +308,21 @@ describe('MobileAppShell navigation regression', () => {
 const HeaderActionProbe = () => {
   const [count, setCount] = useState(0);
   const options = useMemo(() => ({ onAction: () => setCount((c) => c + 1) }), []);
-  useMobileHeader(options);
+  useMobileHeaderAction(options);
   return <output data-testid="probe">{count}</output>;
 };
 
-/** A sub-page that overrides the header, like MobileEnterpriseConsole. */
-const DetailProbe = () => {
-  const options = useMemo(() => ({
-    mode: 'detail' as const,
-    title: '智能体管理',
-    backTo: '/enterprise',
-  }), []);
-  useMobileHeader(options);
-  return <LocationProbe />;
-};
-
 /**
- * The enterprise resource page scenario: the console shell registers a
- * detail layer (← 智能体管理) while the page inside it registers the create
- * action. The two layers must MERGE, not clobber (审查 MAJOR 回归).
+ * The enterprise resource page scenario: the page declares the create action
+ * over a route-meta-driven detail header（审查 MAJOR 回归：层合并不 clobber）。
  */
 const EnterpriseResourceProbe = () => {
-  const detail = useMemo(() => ({
-    mode: 'detail' as const,
-    title: '智能体管理',
-    backTo: '/enterprise',
-  }), []);
-  useMobileHeader(detail);
-
-  // Mirrors MobileResourcePage: the page itself declares the create action.
   const [count, setCount] = useState(0);
   const create = useMemo(() => ({
     action: 'create' as const,
     onAction: () => setCount((c) => c + 1),
   }), []);
-  useMobileHeader(create);
+  useMobileHeaderAction(create);
   return <output data-testid="probe">{count}</output>;
 };
 
@@ -419,14 +399,13 @@ describe('MobileAppShell route-aware header', () => {
           },
         },
         children: [
-          { index: true, element: <DetailProbe /> },
+          { index: true, element: <LocationProbe /> },
         ],
       },
     ], { initialEntries: ['/enterprise/resources/agents'] });
     await act(async () => {
       root.render(<RouterProvider router={router} />);
     });
-    // DetailProbe 的 header override 经 effect 注册，等一帧生效。
     await act(async () => { await Promise.resolve(); });
 
     expect(document.querySelector('.mobile-shell__title')?.textContent)
