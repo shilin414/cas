@@ -2,7 +2,7 @@
  * MobileScheduleCenter — 移动自动化中心行为回归（开发执行报告 §79）。
  *
  * 验证：卡片信息层次、••• ActionSheet 收纳全部二级操作、
- * 立即运行 / 编辑 / 查看执行记录 触发正确动作，且不改变请求语义
+ * 立即运行 / 编辑 / 启停 / 删除 触发正确动作，详情/编辑走路由 PUSH（§54/§59）
  * （同一 scheduleApi，payload 不受 UI 重构影响）。
  */
 // @vitest-environment jsdom
@@ -10,6 +10,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
+import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 
 const mocks = vi.hoisted(() => ({
   fetchSchedules: vi.fn(),
@@ -86,16 +87,10 @@ vi.mock('@/services/scheduleApi', () => ({
   deleteSchedule: mocks.deleteSchedule,
 }));
 
-vi.mock('@/components/Schedules/MobileScheduleEditor', () => ({
-  MobileScheduleEditor: ({ open, editing }: { open: boolean; editing: { name: string } | null }) => (
-    open ? <div data-testid="mobile-editor">{editing ? `编辑:${editing.name}` : '新建'}</div> : null
-  ),
-}));
-vi.mock('@/components/Schedules/MobileScheduleDetail', () => ({
-  MobileScheduleDetail: ({ open, scheduleId }: { open: boolean; scheduleId: number | null }) => (
-    open ? <div data-testid="mobile-detail">{scheduleId}</div> : null
-  ),
-}));
+// 编辑器已路由化（Architecture 2.0 §59）：＋ / ActionSheet 编辑走 pushPage。
+
+// 详情已路由化（Architecture 2.0 §54）：卡片点击走 useAppNavigation.pushPage。
+
 
 import { MobileScheduleCenter } from '../MobileScheduleCenter';
 import type { Schedule } from '@/types/schedule';
@@ -132,14 +127,23 @@ const SCHEDULES = [
 ];
 
 const mounted: Array<{ host: HTMLElement; root: Root }> = [];
+let activeRouter: ReturnType<typeof createMemoryRouter> | null = null;
 
 async function mountCenter() {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
   mounted.push({ host, root });
+  // data router：useAppNavigation（useMatches）需要；卡片点击断言 PUSH。
+  activeRouter = createMemoryRouter([
+    { path: '/', element: <div data-testid="home">home</div> },
+    { path: '/schedules', element: <MobileScheduleCenter /> },
+    { path: '/schedules/new', element: <div data-testid="editor-new">editor-new</div> },
+    { path: '/schedules/:scheduleId', element: <div data-testid="detail">detail</div> },
+    { path: '/schedules/:scheduleId/edit', element: <div data-testid="editor-edit">editor-edit</div> },
+  ], { initialEntries: ['/schedules'] });
   await act(async () => {
-    root.render(<MobileScheduleCenter />);
+    root.render(<RouterProvider router={activeRouter!} />);
   });
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -200,7 +204,7 @@ describe('MobileScheduleCenter (§25/§27/§79)', () => {
     expect(document.querySelector('.mobile-action-sheet__row')).toBeNull();
 
     await click(document.querySelector('[aria-label="更多操作：每日销售日报"]')!);
-    for (const label of ['立即运行', '编辑', '暂停', '查看执行记录', '删除']) {
+    for (const label of ['立即运行', '编辑', '暂停', '删除']) {
       expect(actionRow(label)).toBeTruthy();
     }
   });
@@ -212,20 +216,19 @@ describe('MobileScheduleCenter (§25/§27/§79)', () => {
     expect(mocks.runScheduleNow).toHaveBeenCalledWith(1);
   });
 
-  it('编辑 opens the full-screen editor bound to the schedule', async () => {
+  it('编辑 pushes /schedules/:id/edit (route-backed editor, §59)', async () => {
     await mountCenter();
     await click(document.querySelector('[aria-label="更多操作：每日销售日报"]')!);
     await click(actionRow('编辑')!);
-    expect(document.querySelector('[data-testid="mobile-editor"]')?.textContent)
-      .toBe('编辑:每日销售日报');
+    expect(activeRouter!.state.location.pathname).toBe('/schedules/1/edit');
+    expect(activeRouter!.state.historyAction).toBe('PUSH');
   });
 
-  it('查看执行记录 opens the full-screen detail', async () => {
+  it('卡片点击 pushes /schedules/:id (route-backed detail, §54)', async () => {
     await mountCenter();
-    await click(document.querySelector('[aria-label="更多操作：每日销售日报"]')!);
-    await click(actionRow('查看执行记录')!);
-    expect(document.querySelector('[data-testid="mobile-detail"]')?.textContent)
-      .toBe('1');
+    await click(document.querySelector('[aria-label="查看任务详情：每日销售日报"]')!);
+    expect(activeRouter!.state.location.pathname).toBe('/schedules/1');
+    expect(activeRouter!.state.historyAction).toBe('PUSH');
   });
 
   it('删除 routes through Modal.confirm, never a bare delete (§27)', async () => {

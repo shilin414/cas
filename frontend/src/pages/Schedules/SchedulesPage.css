@@ -243,3 +243,43 @@
 .mobile-schedule-card__more:active {
   background: var(--color-bg-elevated);
 }
+
+/* Mobile 编辑页底部保存条（Route 页面版，Architecture 2.0 §60–§61）：
+   原全屏 Drawer 的 footer 换成页面内的固定操作条。 */
+.mobile-schedule-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding-bottom: 72px;
+}
+.mobile-schedule-editor__bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  background: var(--ant-color-bg-container, #fff);
+  border-top: 1px solid var(--ant-color-border-secondary, #f0f0f0);
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  z-index: 10;
+}
+.mobile-schedule-editor__primary {
+  flex: 1;
+  height: 44px;
+  border-radius: 10px;
+  border: none;
+  background: var(--ant-color-primary, #1677ff);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+}
+.mobile-schedule-editor__primary:disabled {
+  opacity: 0.6;
+}
+
+/* Mobile 详情页容器（Route 页面版，原 MobileFullScreenDrawer 正文区）。 */
+.mobile-schedule-detail.mobile-page {
+  padding: 12px 16px 24px;
+}

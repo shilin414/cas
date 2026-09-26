@@ -31,6 +31,13 @@ const WorkflowRunnerPage = lazy(() => import('@/pages/Workflows/WorkflowRunnerPa
 const SkillsPage = lazy(() => import('@/pages/Skills/SkillsPage'));
 const SchedulesPage = lazy(() => import('@/pages/Schedules/SchedulesPage')
   .then((m) => ({ default: m.SchedulesPage })));
+// Schedules route surfaces（Architecture 2.0 §51）：详情/编辑有真实 URL。
+const ScheduleListRoute = lazy(() => import('@/pages/Schedules/ScheduleListRoute'));
+const ScheduleDetailRoute = lazy(() => import('@/pages/Schedules/ScheduleDetailRoute'));
+const ScheduleEditorCreateRoute = lazy(() => import('@/pages/Schedules/ScheduleEditorRoute')
+  .then((m) => ({ default: (props: { mode?: 'create' | 'edit' }) => <m.default mode={props.mode ?? 'create'} /> })));
+const ScheduleEditorEditRoute = lazy(() => import('@/pages/Schedules/ScheduleEditorRoute')
+  .then((m) => ({ default: () => <m.default mode="edit" /> })));
 
 // Auth pages stay outside the shell entirely.
 // 普通用户 = 飞书 SSO Only（/login 自动发起 OAuth）；管理员 = /login/admin。
@@ -249,8 +256,50 @@ const router = createBrowserRouter([
       { path: 'skills', element: lazyConsole(<SkillsPage />), handle: fullWidthConsole },
       {
         path: 'schedules',
-        element: lazyConsole(<SchedulesPage />),
+        element: lazyConsole(<ScheduleListRoute />),
         handle: schedulesPageHandle,
+      },
+      {
+        path: 'schedules/new',
+        element: lazyConsole(<ScheduleEditorCreateRoute />),
+        handle: {
+          shell: schedulesPageHandle.shell,
+          app: {
+            id: 'schedule-editor-new',
+            level: 'detail' as const,
+            root: '/schedules',
+            parent: '/schedules',
+            mobile: { mode: 'detail' as const, title: '新建自动化' },
+          },
+        },
+      },
+      {
+        path: 'schedules/:scheduleId',
+        element: lazyConsole(<ScheduleDetailRoute />),
+        handle: {
+          shell: schedulesPageHandle.shell,
+          app: {
+            id: 'schedule-detail',
+            level: 'detail' as const,
+            root: '/schedules',
+            parent: '/schedules',
+            mobile: { mode: 'detail' as const, title: '自动化详情' },
+          },
+        },
+      },
+      {
+        path: 'schedules/:scheduleId/edit',
+        element: lazyConsole(<ScheduleEditorEditRoute />),
+        handle: {
+          shell: schedulesPageHandle.shell,
+          app: {
+            id: 'schedule-editor-edit',
+            level: 'detail' as const,
+            root: '/schedules',
+            parent: '/schedules/:scheduleId',
+            mobile: { mode: 'detail' as const, title: '编辑自动化' },
+          },
+        },
       },
       {
         path: 'workflows',

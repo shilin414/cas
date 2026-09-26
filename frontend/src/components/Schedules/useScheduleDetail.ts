@@ -46,7 +46,6 @@ export interface UseScheduleDetailResult {
 }
 
 export function useScheduleDetail(
-  open: boolean,
   scheduleId: number | null,
 ): UseScheduleDetailResult {
   const [schedule, setSchedule] = useState<Schedule | null>(null);
@@ -66,20 +65,20 @@ export function useScheduleDetail(
   // 掉更新 loadMore 的 spinner。只有最新的 loadMore 拥有 spinner 状态。
   const occLoadMoreSeqRef = useRef(0);
 
-  // 目标变化与「关闭」都清空两域旧数据：关闭时的清空发生在抽屉不可见期
-  // 间，重开新目标不会在首帧闪现上一个任务的配置/执行记录（复审 P1）。
+  // 目标变化清空两域旧数据：路由参数变化（详情页切换）不会在首帧闪现
+  // 上一个任务的配置/执行记录（复审 P1）。Route 页面天然代表 open=true。
   useEffect(() => {
     setSchedule(null);
     setOccurrences([]);
     setOccurrenceError(null);
     setError(null);
     setHasMoreOccurrences(false);
-  }, [open, scheduleId]);
+  }, [scheduleId]);
 
   // 任务配置：主数据，独立失败域（§37）。提取为可重试的加载函数（四次复审
   // P2-3）——配置失败不再只能「关抽屉重开」，原地给重试按钮。
   const loadSchedule = useCallback(async () => {
-    if (!open || !scheduleId) return;
+    if (!scheduleId) return;
     const seq = ++scheduleSeqRef.current;
     setLoading(true);
     setError(null);
@@ -93,7 +92,7 @@ export function useScheduleDetail(
     } finally {
       if (seq === scheduleSeqRef.current) setLoading(false);
     }
-  }, [open, scheduleId]);
+  }, [scheduleId]);
 
   useEffect(() => {
     void loadSchedule();
@@ -104,7 +103,7 @@ export function useScheduleDetail(
 
   // 执行记录：辅助历史数据，独立加载 + 独立重试（§37），分页（§35）。
   const loadOccurrences = useCallback(async () => {
-    if (!open || !scheduleId) return;
+    if (!scheduleId) return;
     const seq = ++occSeqRef.current;
     // 新结果集 → 在途翻页立即作废（四次复审 P1-2）。
     occLoadMoreSeqRef.current += 1;
@@ -124,7 +123,7 @@ export function useScheduleDetail(
     } finally {
       if (seq === occSeqRef.current) setOccurrencesLoading(false);
     }
-  }, [open, scheduleId]);
+  }, [scheduleId]);
 
   useEffect(() => {
     void loadOccurrences();
@@ -135,7 +134,7 @@ export function useScheduleDetail(
   }, [loadOccurrences]);
 
   const loadMoreOccurrences = useCallback(async () => {
-    if (!open || !scheduleId) return;
+    if (!scheduleId) return;
     if (loadingMoreOccurrences || occurrencesLoading || !hasMoreOccurrences) return;
     const beforeId = occurrences[occurrences.length - 1]?.id;
     if (!beforeId) return;
@@ -165,7 +164,7 @@ export function useScheduleDetail(
       }
     }
   }, [
-    open, scheduleId, occurrences, loadingMoreOccurrences,
+    scheduleId, occurrences, loadingMoreOccurrences,
     occurrencesLoading, hasMoreOccurrences,
   ]);
 

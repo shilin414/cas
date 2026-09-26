@@ -26,7 +26,7 @@ export function ScheduleDetailDrawer({ open, scheduleId, onClose }: ScheduleDeta
     occurrences, occurrencesLoading, occurrenceError,
     hasMoreOccurrences, loadingMoreOccurrences, loadMoreOccurrences,
     retryOccurrences, retrySchedule,
-  } = useScheduleDetail(open, scheduleId);
+  } = useScheduleDetail(open ? scheduleId : null);
 
   return (
     <Drawer

@@ -38,7 +38,8 @@ export interface UseScheduleEditorOptions {
   editing: Schedule | null;
   /** 从智能体卡片/聊天页带入的预选应用 id。 */
   presetApplicationId?: number;
-  onSaved: () => void;
+  /** 保存成功；created 模式携带服务器返回的新 Schedule（§62 replace 语义）。 */
+  onSaved: (saved: Schedule) => void;
   onClose: () => void;
 }
 
@@ -455,17 +456,18 @@ export function useScheduleEditor({
         message.error('原智能体当前不可用，请重新选择一个智能体');
         return;
       }
+      let saved: Schedule;
       if (editing) {
-        await updateSchedule(editing.id, payload);
+        saved = await updateSchedule(editing.id, payload);
       } else {
-        await createSchedule(payload);
+        saved = await createSchedule(payload);
       }
       // 保存请求结束时会话已换（关闭/重开/换了编辑对象，四次复审 P1-3）：
       // 旧响应不再 toast / onSaved / onClose —— 否则正在编辑任务 B 的
       // 新编辑器会被任务 A 的晚到响应直接关掉。
       if (editorEpochRef.current !== saveEpoch) return;
       message.success(editing ? '自动化已更新' : '自动化已创建');
-      onSaved();
+      onSaved(saved);
       onClose();
     } catch (e) {
       // 同理：旧会话的失败 toast 也不属于新会话。

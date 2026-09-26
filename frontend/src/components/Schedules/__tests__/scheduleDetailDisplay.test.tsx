@@ -4,7 +4,7 @@ import { act } from 'react-dom/test-utils';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleDetailDrawer } from '../ScheduleDetailDrawer';
-import { MobileScheduleDetail } from '../MobileScheduleDetail';
+import { MobileScheduleDetailPage } from '../MobileScheduleDetailPage';
 import { formatLocalDateTime } from '@/lib/scheduleFormat';
 import type { Schedule } from '@/types/schedule';
 const mock = vi.hoisted(() => ({ schedule: null as Schedule | null }));
@@ -27,9 +27,9 @@ beforeEach(() => {
   } as Schedule;
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); });
-describe.each([['desktop', ScheduleDetailDrawer], ['mobile', MobileScheduleDetail]] as const)('%s detail', (_name, Detail) => {
+describe.each([['desktop', ScheduleDetailDrawer], ['mobile', MobileScheduleDetailPage]] as const)('%s detail', (_name, Detail) => {
   it('shows effective dates, explicit timezones and all per-target predicates', async () => {
-    await act(async () => root.render(<Detail open scheduleId={7} onClose={() => {}} />));
+    await act(async () => root.render(<Detail open={true as never} scheduleId={7} onClose={() => {}} />));
     const text = document.body.textContent;
     expect(text).toContain('计划时区：America/New_York');
     expect(text).toContain('生效开始：'); expect(text).toContain('生效结束：');
@@ -45,7 +45,7 @@ describe.each([['desktop', ScheduleDetailDrawer], ['mobile', MobileScheduleDetai
   });
   it('shows unbounded defaults and labels a once time as device-local rather than recurrence timezone', async () => {
     mock.schedule = { ...mock.schedule!, schedule_type: 'once', run_at: '2099-01-01T09:00:00Z', trigger: {}, deliveries: [] };
-    await act(async () => root.render(<Detail open scheduleId={7} onClose={() => {}} />));
+    await act(async () => root.render(<Detail open={true as never} scheduleId={7} onClose={() => {}} />));
     expect(document.body.textContent).toContain('立即生效'); expect(document.body.textContent).toContain('永不结束');
     expect(document.body.textContent).toContain(formatLocalDateTime(mock.schedule.run_at));
     expect(document.body.textContent).not.toContain('计划时区：America/New_York');

@@ -1,12 +1,10 @@
 /**
- * MobileScheduleCenter — 自动化移动端 (开发执行报告 §23–§30)。
+ * MobileScheduleCenter — 自动化移动端（Architecture 2.0 §54–§55）。
  *
- * 与桌面共用 useSchedules（业务层绝不复制），信息架构换成移动版：
- *   · 顶栏：Shell Header（自动化 + ＋），＋ 直接打开编辑器（§24）；
- *   · 工具区：状态 Segmented + 搜索，无独立刷新按钮，错误态给重试；
- *   · 卡片：名称 + compact 状态 + 计划/下次执行，点击进全屏详情；
- *   •••    ：ActionSheet 收纳 立即运行/编辑/启停/记录/删除（§27），
- *            删除走 Modal.confirm（手机上比 Popconfirm 稳）。
+ * 与桌面共用 useSchedules（业务层绝不复制）。详情/编辑不再是本地 state：
+ *   · 点击卡片 → pushPage('/schedules/:id')（真实 History，侧滑返回）；
+ *   · 编辑 → pushPage('/schedules/:id/edit')；
+ *   ••• ActionSheet 保留 立即运行/启停/删除（真正的临时 Overlay）。
  */
 import React, { useCallback, useState } from 'react';
 import { Alert, Button, Modal, Segmented, Skeleton } from 'antd';
@@ -14,16 +12,14 @@ import {
   CaretRightOutlined,
   DeleteOutlined,
   EditOutlined,
-  EyeOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
 } from '@ant-design/icons';
 import { useSchedules } from '@/hooks/useSchedules';
 import { useMobileHeader } from '@/shell/mobileHeader';
+import { useAppNavigation } from '@/router/useAppNavigation';
 import type { Schedule, ScheduleStatusFilter } from '@/types/schedule';
 import { ScheduleStatusTag } from '@/components/Schedules/ScheduleStatusTag';
-import { MobileScheduleEditor } from '@/components/Schedules/MobileScheduleEditor';
-import { MobileScheduleDetail } from '@/components/Schedules/MobileScheduleDetail';
 import {
   MobileActionSheet,
   MobileEmptyState,
@@ -48,29 +44,20 @@ export function MobileScheduleCenter() {
     status, search, isMutating,
     setStatus, setSearch, reload, toggleEnabled, runNow, remove,
   } = useSchedules();
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editing, setEditing] = useState<Schedule | null>(null);
-  const [detailId, setDetailId] = useState<number | null>(null);
+  const navigation = useAppNavigation();
   const [sheetFor, setSheetFor] = useState<Schedule | null>(null);
 
   // 错误分类（三次复审 §30–§31）：fatal = 第一页失败且无数据；
-  // partial = 已有数据时刷新失败 → 警告 + 旧数据继续展示；loadMore 失败
-  // → 底部唯一 CTA 变重试。已有任务绝不能因为一次刷新失败从 UI 消失。
+  // partial = 已有数据时刷新失败 → 警告 + 旧数据继续展示。
   const fatalError = Boolean(error) && data.length === 0;
   const partialError = Boolean(error) && data.length > 0
     && errorPhase !== 'loadMore';
 
-  // 顶栏 ＝ 新建自动化（§24）：直接打开编辑器，不再 navigate('/')。
+  // 顶栏 ＋：路由进入新建页（真实 URL，可返回/刷新）。
   const openNew = useCallback(() => {
-    setEditing(null);
-    setEditorOpen(true);
-  }, []);
+    navigation.pushPage('/schedules/new');
+  }, [navigation]);
   useMobileHeader({ onAction: openNew });
-
-  const openEdit = (s: Schedule) => {
-    setEditing(s);
-    setEditorOpen(true);
-  };
 
   const confirmRemove = (s: Schedule) => {
     Modal.confirm({
@@ -91,7 +78,7 @@ export function MobileScheduleCenter() {
     },
     {
       key: 'edit', label: '编辑', icon: <EditOutlined />,
-      onClick: () => openEdit(sheetFor),
+      onClick: () => navigation.pushPage(`/schedules/${sheetFor.id}/edit`),
     },
     {
       key: 'toggle',
@@ -99,10 +86,6 @@ export function MobileScheduleCenter() {
       icon: sheetFor.enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />,
       disabled: isMutating(sheetFor.id),
       onClick: () => void toggleEnabled(sheetFor.id, !sheetFor.enabled),
-    },
-    {
-      key: 'detail', label: '查看执行记录', icon: <EyeOutlined />,
-      onClick: () => setDetailId(sheetFor.id),
     },
     {
       key: 'remove', label: '删除', icon: <DeleteOutlined />, danger: true,
@@ -145,7 +128,6 @@ export function MobileScheduleCenter() {
 
       {!fatalError && (
         <>
-          {/* partial：刷新失败，旧数据保留 + 警告（三次复审 §31）。 */}
           {partialError && (
             <Alert
               type="warning"
@@ -180,13 +162,12 @@ export function MobileScheduleCenter() {
             <div className="mobile-schedule-list">
               {data.map((s) => (
                 <div key={s.id} className="mobile-schedule-card">
-                  {/* Wrapper / Main / ••• — 全部原生 button，浏览器接管焦点树与
-                      Enter/Space 激活（二次复审 P2-2，不再用 role=button 容器）。 */}
+                  {/* 点击卡片 → 详情路由 PUSH（真实 History）。 */}
                   <button
                     type="button"
                     className="mobile-schedule-card__main"
                     aria-label={`查看任务详情：${s.name}`}
-                    onClick={() => setDetailId(s.id)}
+                    onClick={() => navigation.pushPage(`/schedules/${s.id}`)}
                   >
                     <div className="mobile-schedule-card__row">
                       <span className="mobile-schedule-card__name">{s.name}</span>
@@ -212,7 +193,6 @@ export function MobileScheduleCenter() {
                   </button>
                 </div>
               ))}
-              {/* 唯一 CTA（三次复审 §32）：翻页失败 → 重试；否则加载更多。 */}
               {errorPhase === 'loadMore' ? (
                 <button
                   type="button"
@@ -240,18 +220,6 @@ export function MobileScheduleCenter() {
         title={sheetFor?.name}
         actions={actions}
         onClose={() => setSheetFor(null)}
-      />
-
-      <MobileScheduleEditor
-        open={editorOpen}
-        editing={editing}
-        onClose={() => setEditorOpen(false)}
-        onSaved={() => void reload()}
-      />
-      <MobileScheduleDetail
-        open={detailId !== null}
-        scheduleId={detailId}
-        onClose={() => setDetailId(null)}
       />
     </MobilePage>
   );

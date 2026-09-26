@@ -9,11 +9,11 @@ export interface ScheduleEditorModalProps {
   editing: Schedule | null;
   presetApplicationId?: number;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved?: (saved: Schedule) => void;
 }
 
 export function ScheduleEditorModal({ open, editing, presetApplicationId, onClose, onSaved }: ScheduleEditorModalProps) {
-  const state = useScheduleEditor({ open, editing, presetApplicationId, onSaved, onClose });
+  const state = useScheduleEditor({ open, editing, presetApplicationId, onSaved: onSaved ?? (() => {}), onClose });
   return (
     <Modal
       title={editing ? '编辑自动化' : '新建自动化'}

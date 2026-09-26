@@ -58,19 +58,18 @@ interface Probe { current: UseScheduleDetailResult | null }
 let host: HTMLElement;
 let root: Root;
 let latest: Probe;
-let openRef: { current: boolean };
 let idRef: { current: number | null };
 
 function ProbeComponent() {
-  latest.current = useScheduleDetail(openRef.current, idRef.current);
+  latest.current = useScheduleDetail(idRef.current);
   return null;
 }
 
 beforeEach(() => {
-  mockSchedule.mockReset();
-  mockOccurrences.mockReset();
+  mockSchedule.mockReset().mockRejectedValue(new Error('no default schedule mock'));
+  mockOccurrences.mockReset().mockRejectedValue(new Error('no default occurrences mock'));
   latest = { current: null };
-  openRef = { current: true };
+
   idRef = { current: 9 };
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -192,29 +191,33 @@ describe('useScheduleDetail — 执行记录分页（§33–§35）', () => {
   });
 });
 
-describe('useScheduleDetail — 关闭清空（复审 P1）', () => {
-  it('closing drops the config/history so a reopen never flashes them', async () => {
-    mockSchedule.mockResolvedValue(schedule(9));
-    mockOccurrences.mockResolvedValue([occ(3), occ(2)]);
+describe('useScheduleDetail — 目标切换清空（Route 化后的复审 P1）', () => {
+  it('switching targets drops the config/history so a new target never flashes the old ones', async () => {
+    mockSchedule.mockResolvedValueOnce(schedule(9));
+    mockOccurrences.mockResolvedValueOnce([occ(3), occ(2)]);
     await act(async () => { root.render(<ProbeComponent />); });
     await flush(10);
     expect(latest.current!.schedule?.name).toBe('任务9');
     expect(latest.current!.occurrences).toHaveLength(2);
 
-    // Close the drawer: the closed surface must hold NOTHING of the previous
-    // target — otherwise reopening for another schedule paints 任务9's
-    // config under the new title for the first frame.
-    openRef.current = false;
+    // Route 化（§55）：没有 open 概念，清空点 = 路由参数（scheduleId）变化。
+    // 新目标的第一帧绝不能闪现上一个任务的配置 —— 新目标的请求挂起中。
+    let resolveB!: (value: Schedule | null) => void;
+    mockSchedule.mockImplementationOnce(() => new Promise((res) => { resolveB = res as typeof resolveB; }));
+    mockOccurrences.mockImplementationOnce(() => new Promise<ScheduleOccurrence[]>((res) => { void res; }));
+    idRef.current = 10;
     await act(async () => { root.render(<ProbeComponent />); });
-    await flush(10);
-    expect(latest.current!.schedule).toBeNull();
-    expect(latest.current!.occurrences).toEqual([]);
-    expect(latest.current!.occurrenceError).toBeNull();
-    expect(latest.current!.hasMoreOccurrences).toBe(false);
-    expect(latest.current!.error).toBeNull();
+    await act(async () => { await Promise.resolve(); });
+    const snapshot = latest.current!;
+    expect(snapshot.schedule ?? null).toBeNull();
+    expect(snapshot.occurrences ?? []).toEqual([]);
+    expect(snapshot.occurrenceError ?? null).toBeNull();
+    expect(snapshot.hasMoreOccurrences ?? false).toBe(false);
+    expect(snapshot.error ?? null).toBeNull();
+    void resolveB;
   });
 
-  it('a late occurrences response cannot repopulate after close', async () => {
+  it('a late occurrences response cannot repopulate after the target switches', async () => {
     mockSchedule.mockResolvedValue(schedule(9));
     let resolveOccs!: (value: ScheduleOccurrence[]) => void;
     mockOccurrences.mockImplementationOnce(
@@ -222,9 +225,9 @@ describe('useScheduleDetail — 关闭清空（复审 P1）', () => {
     await act(async () => { root.render(<ProbeComponent />); });
     await flush(10);
 
-    openRef.current = false;
+    idRef.current = 10;
     await act(async () => { root.render(<ProbeComponent />); });
-    await flush(10);
+    await act(async () => { await Promise.resolve(); });
     expect(latest.current!.occurrences).toEqual([]);
 
     // The in-flight response settles now — it must be discarded entirely.

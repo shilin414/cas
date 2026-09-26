@@ -1,43 +1,30 @@
 /**
- * MobileScheduleDetail — 自动化移动端详情（开发执行报告 §30）：
- * Full Screen（执行记录可能很多），← 标题在 Drawer 头部，正文按
- * 状态 / 执行计划 / 任务内容 / 通知 / 执行记录分节。
+ * MobileScheduleDetailPage — /schedules/:id 移动详情页（Architecture 2.0 §55）。
  *
- * 任务配置与执行记录是两个失败域（三次复审 §36–§37）：历史接口故障时
- * 配置照常显示，执行记录区域给独立错误 + 重试；执行记录分页（§35），
- * 第 51 条以前的历史不再不可见。
+ * 从 MobileScheduleDetail（open/onClose drawer 版）重构为路由页面：
+ * open 恒 true、返回交给 Shell Header（navigation.back）。内容分节、
+ * 双失败域、分页语义与原组件完全一致。
  */
 import React from 'react';
 import { Alert, Button, Skeleton, Tag } from 'antd';
-import { MobileFullScreenDrawer, MobileSection } from '@/components/MobileConsole';
-import { OccurrenceStatusTag, ScheduleStatusTag } from './ScheduleStatusTag';
+import { MobileSection } from '@/components/MobileConsole';
+import { OccurrenceStatusTag, ScheduleStatusTag } from '@/components/Schedules/ScheduleStatusTag';
 import { describeSchedulePlan, describeDeliveryCondition, formatLocalDateTime } from '@/lib/scheduleFormat';
-import { useScheduleDetail } from './useScheduleDetail';
+import { useScheduleDetail } from '@/components/Schedules/useScheduleDetail';
 import './MobileScheduleDetail.css';
 
-export interface MobileScheduleDetailProps {
-  open: boolean;
-  scheduleId: number | null;
-  onClose: () => void;
-}
-
-export function MobileScheduleDetail({ open, scheduleId, onClose }: MobileScheduleDetailProps) {
+export function MobileScheduleDetailPage({ scheduleId }: { scheduleId: number }) {
   const {
     schedule, loading, error,
     occurrences, occurrencesLoading, occurrenceError,
     hasMoreOccurrences, loadingMoreOccurrences, loadMoreOccurrences,
     retryOccurrences, retrySchedule,
-  } = useScheduleDetail(open, scheduleId);
+  } = useScheduleDetail(scheduleId);
 
   return (
-    <MobileFullScreenDrawer
-      open={open}
-      title={schedule?.name ?? '自动化详情'}
-      onClose={onClose}
-    >
+    <div className="mobile-schedule-detail mobile-page">
       {loading && <Skeleton active />}
       {error && (
-        /* 配置失败可原地重试（四次复审 P2-3），不再只能关抽屉重开。 */
         <Alert
           type="error"
           showIcon
@@ -120,7 +107,6 @@ export function MobileScheduleDetail({ open, scheduleId, onClose }: MobileSchedu
                     )}
                   </div>
                 ))}
-                {/* 唯一 CTA：翻页失败 → 重试；否则加载更多（§35）。 */}
                 {occurrenceError ? (
                   <button
                     type="button"
@@ -143,6 +129,6 @@ export function MobileScheduleDetail({ open, scheduleId, onClose }: MobileSchedu
           </MobileSection>
         </>
       )}
-    </MobileFullScreenDrawer>
+    </div>
   );
 }
